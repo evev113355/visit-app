@@ -1,0 +1,907 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>滞納訪問 ルート作成・日報管理（PC）</title>
+<link rel="icon" href="icon.svg">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+<style>
+  :root { --main:#1f4e79; --accent:#2e75b6; --ok:#2e7d32; --warn:#c62828; --bg:#f3f5f8; --line:#d6dce4; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:"Yu Gothic UI","Meiryo","Noto Sans JP",sans-serif; background:var(--bg); color:#222; font-size:14px; }
+  header { background:var(--main); color:#fff; display:flex; align-items:center; gap:16px; padding:0 16px; height:52px; }
+  header h1 { font-size:16px; margin:0; }
+  nav { display:flex; gap:4px; flex:1; }
+  nav button { background:transparent; color:#cfe0f1; border:none; font-size:14px; padding:16px 14px; cursor:pointer; border-bottom:3px solid transparent; }
+  nav button.on { color:#fff; border-bottom-color:#fff; font-weight:bold; }
+  #folderBox { font-size:12px; display:flex; align-items:center; gap:8px; }
+  #folderBox b { font-size:13px; }
+  .page { display:none; padding:14px 16px; }
+  .page.on { display:block; }
+  .btn { background:var(--accent); color:#fff; border:none; border-radius:6px; padding:8px 14px; font-size:14px; cursor:pointer; }
+  .btn:disabled { background:#9fb4c8; cursor:default; }
+  .btn.sub { background:#fff; color:var(--accent); border:1px solid var(--accent); }
+  .btn.ok { background:var(--ok); }
+  .btn.warn { background:#fff; color:var(--warn); border:1px solid var(--warn); }
+  .btn.xs { padding:2px 8px; font-size:12px; }
+  .panel { background:#fff; border:1px solid var(--line); border-radius:8px; padding:12px; margin-bottom:12px; }
+  .panel h2 { font-size:15px; margin:0 0 10px; color:var(--main); }
+  .grid2 { display:grid; grid-template-columns: 1fr 1fr; gap:12px; }
+  .routeGrid { display:grid; grid-template-columns: minmax(520px, 1.1fr) 1fr; gap:12px; align-items:start; }
+  #map { height: calc(100vh - 110px); min-height:480px; border-radius:8px; border:1px solid var(--line); position:sticky; top:10px; }
+  table { border-collapse:collapse; width:100%; }
+  th, td { border-bottom:1px solid var(--line); padding:5px 6px; text-align:left; vertical-align:top; }
+  th { background:#eef3f8; font-weight:bold; position:sticky; top:0; z-index:1; }
+  .tblWrap { max-height:340px; overflow:auto; border:1px solid var(--line); border-radius:6px; }
+  .muted { color:#666; font-size:12px; }
+  .bad { color:var(--warn); }
+  .good { color:var(--ok); }
+  .drop { border:2px dashed #9fb4c8; border-radius:8px; padding:16px; text-align:center; color:#567; background:#f8fbff; cursor:pointer; }
+  .drop.over { background:#e3effb; border-color:var(--accent); }
+  .form { display:flex; flex-wrap:wrap; gap:10px; align-items:flex-end; }
+  .form label { display:flex; flex-direction:column; font-size:12px; color:#444; gap:3px; }
+  input[type=text], input[type=date], select { padding:6px 8px; font-size:14px; border:1px solid var(--line); border-radius:5px; }
+  ol#routeList { list-style:none; padding:0; margin:0; }
+  #routeList li { display:flex; gap:8px; align-items:center; padding:6px; border:1px solid var(--line); border-radius:6px; margin-bottom:4px; background:#fff; cursor:grab; }
+  #routeList li.dragging { opacity:.4; }
+  #routeList .n { flex:0 0 26px; height:26px; border-radius:13px; background:var(--accent); color:#fff; display:flex; align-items:center; justify-content:center; font-weight:bold; font-size:12px; }
+  #routeList .b { flex:1; min-width:0; }
+  .numIcon div { width:26px; height:26px; border-radius:13px; background:var(--accent); color:#fff; border:2px solid #fff; box-shadow:0 0 3px rgba(0,0,0,.5); display:flex; align-items:center; justify-content:center; font-weight:bold; font-size:12px; }
+  .numIcon.start div { background:#333; }
+  .numIcon.cand div { background:#9aa7b4; width:16px; height:16px; }
+  .log { background:#111; color:#dfe; font-family:Consolas,monospace; font-size:12px; padding:10px; border-radius:6px; max-height:300px; overflow:auto; white-space:pre-wrap; }
+  .detail { white-space:pre-wrap; }
+  .tagr { display:inline-block; padding:1px 6px; border-radius:4px; background:#e8eef6; color:var(--main); font-size:12px; margin-right:3px; }
+  tr.click { cursor:pointer; }
+  tr.click:hover { background:#f2f7fd; }
+  tr.sel { background:#e3effb; }
+  .photosRow img { width:200px; height:150px; object-fit:cover; border-radius:6px; margin:4px 4px 0 0; border:1px solid var(--line); }
+  .notice { background:#fff4e5; border:1px solid #f0b46c; border-radius:6px; padding:8px 10px; margin-bottom:10px; }
+  /* PDF用 */
+  #pdfStage { position:fixed; left:-10000px; top:0; }
+  .pdfPage { width:794px; padding:40px 44px; background:#fff; color:#000; font-family:"Yu Gothic","Meiryo",sans-serif; font-size:13px; }
+  .pdfPage h1 { font-size:22px; text-align:center; margin:0 0 4px; letter-spacing:4px; }
+  .pdfPage .sub { text-align:center; font-size:12px; margin-bottom:14px; }
+  .pdfPage table { border-collapse:collapse; width:100%; margin-bottom:12px; }
+  .pdfPage th, .pdfPage td { border:1px solid #555; padding:6px 8px; font-size:13px; position:static; }
+  .pdfPage th { background:#e9eef4; width:130px; white-space:nowrap; }
+  .pdfPage .memo { white-space:pre-wrap; min-height:60px; }
+  .pdfPage .imgs img { width:220px; height:165px; object-fit:cover; border:1px solid #777; margin:0 6px 6px 0; }
+  .pdfPage .foot { margin-top:10px; font-size:10px; color:#555; text-align:right; }
+  .pdfPage.sum th { width:auto; }
+  .pdfPage.sum td, .pdfPage.sum th { font-size:11px; padding:4px 5px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>滞納訪問</h1>
+  <nav>
+    <button data-p="route" class="on">① ルート作成</button>
+    <button data-p="import">② 日報取込・PDF</button>
+    <button data-p="search">③ 履歴検索</button>
+    <button data-p="settings">④ 設定</button>
+  </nav>
+  <div id="folderBox"></div>
+</header>
+
+<!-- ① ルート作成 -->
+<section class="page on" id="p-route">
+  <div class="routeGrid">
+    <div>
+      <div class="panel">
+        <h2>1. 訪問対象者を読み込む</h2>
+        <div style="display:flex; gap:8px; margin-bottom:8px; flex-wrap:wrap">
+          <button class="btn sub" id="tplBtn">入力用Excelテンプレートを保存</button>
+          <button class="btn sub" id="pendingBtn">未訪問一覧から追加</button>
+        </div>
+        <div class="drop" id="excelDrop">ここに対象者Excel（.xlsx）をドロップ、またはクリックして選ぶ</div>
+        <input type="file" id="excelFile" accept=".xlsx" hidden>
+        <div id="excelMsg" class="muted" style="margin-top:6px"></div>
+      </div>
+      <div class="panel">
+        <h2>2. 訪問する人にチェック <span class="muted" id="candCount"></span></h2>
+        <div class="tblWrap"><table id="candTbl"><thead><tr>
+          <th><input type="checkbox" id="checkAll"></th><th>依頼元</th><th>対象者</th><th>物件・号室</th><th>住所</th><th>位置</th><th></th>
+        </tr></thead><tbody></tbody></table></div>
+        <div class="muted" style="margin-top:4px">位置が「×」の人は［地図で指定］を押してから地図をクリックすると位置を決められます。</div>
+      </div>
+      <div class="panel">
+        <h2>3. ルートの条件</h2>
+        <div class="form">
+          <label>訪問日<input type="date" id="rDate"></label>
+          <label>担当者<input type="text" id="rStaff" list="staffList" placeholder="担当者名"></label>
+          <label>移動手段<select id="rMode"></select></label>
+          <label>出発地点<select id="rStart"></select></label>
+          <label id="rStartOtherBox" style="display:none">出発地点の住所<input type="text" id="rStartOther" placeholder="住所や駅名"></label>
+          <button class="btn" id="buildBtn">チェックした人でルートを組む</button>
+        </div>
+        <datalist id="staffList"></datalist>
+      </div>
+      <div class="panel">
+        <h2>4. 順番を確認・修正 <span class="muted" id="routeInfo"></span></h2>
+        <div class="muted" style="margin-bottom:6px">ドラッグで並べ替えできます。［近い順に並べ直す］で自動の順番に戻します。</div>
+        <ol id="routeList"></ol>
+        <div style="display:flex; gap:8px; margin-top:8px">
+          <button class="btn sub" id="reorderBtn">近い順に並べ直す</button>
+          <button class="btn ok" id="saveRouteBtn">ルートファイルを保存（携帯へメールで送る）</button>
+        </div>
+      </div>
+    </div>
+    <div id="map"></div>
+  </div>
+</section>
+
+<!-- ② 日報取込 -->
+<section class="page" id="p-import">
+  <div class="panel">
+    <h2>携帯から届いた日報データを取り込む</h2>
+    <p class="muted">メールに添付された「日報_YYYYMMDD_担当者.json」を保存して、ここにドロップしてください（複数まとめて可）。<br>
+    取り込むと、データを「日報データ」に保存し、1訪問ごとのPDFを「日報PDF」、1日のまとめPDFを「まとめPDF」に作ります。同じファイルを2回取り込んでも重複しません。</p>
+    <div class="drop" id="repDrop">ここに日報データ（.json）をドロップ、またはクリックして選ぶ</div>
+    <input type="file" id="repFile" accept=".json,application/json" multiple hidden>
+  </div>
+  <div class="panel"><h2>結果</h2><div class="log" id="importLog">まだ取り込んでいません。</div></div>
+  <div class="panel">
+    <h2>未訪問一覧（次のルートに戻せます）</h2>
+    <div class="tblWrap"><table id="pendTbl"><thead><tr><th>回れなかった日</th><th>担当</th><th>依頼元</th><th>対象者</th><th>物件・号室</th><th>住所</th><th></th></tr></thead><tbody></tbody></table></div>
+  </div>
+</section>
+
+<!-- ③ 履歴検索 -->
+<section class="page" id="p-search">
+  <div class="panel">
+    <div class="form">
+      <label>キーワード（氏名・フリガナ・住所・物件名・メモ）<input type="text" id="qText" style="width:320px" placeholder="例：山田、八尾市、○○マンション"></label>
+      <label>依頼元<select id="qClient"></select></label>
+      <label>訪問結果<select id="qResult"></select></label>
+      <label>担当者<select id="qStaff"></select></label>
+      <label>期間（から）<input type="date" id="qFrom"></label>
+      <label>（まで）<input type="date" id="qTo"></label>
+      <button class="btn sub" id="qClear">条件をクリア</button>
+      <button class="btn sub" id="rebuildBtn" title="フォルダの日報データを読み直します">索引を作り直す</button>
+    </div>
+    <div class="muted" id="qCount" style="margin-top:6px"></div>
+  </div>
+  <div class="grid2">
+    <div class="panel"><div class="tblWrap" style="max-height:calc(100vh - 230px)"><table id="resTbl"><thead><tr><th>訪問日時</th><th>依頼元</th><th>対象者</th><th>物件・号室</th><th>結果</th><th>次回</th><th>担当</th></tr></thead><tbody></tbody></table></div></div>
+    <div class="panel" id="detailBox"><span class="muted">左の一覧から日報を選ぶと、ここに詳しい内容が出ます。</span></div>
+  </div>
+</section>
+
+<!-- ④ 設定 -->
+<section class="page" id="p-settings">
+  <div class="grid2">
+    <div class="panel">
+      <h2>依頼元の一覧</h2>
+      <div class="muted">Excelテンプレートの選択肢になります。Excelで一覧にない依頼元を入れた場合は、読み込み時に自動で追加されます。</div>
+      <ul id="clientUl"></ul>
+      <div class="form"><input type="text" id="clientIn" placeholder="依頼元名"><button class="btn" id="clientAdd">追加</button></div>
+    </div>
+    <div class="panel">
+      <h2>出発地点</h2>
+      <ul id="startUl"></ul>
+      <div class="form"><input type="text" id="startLabel" placeholder="名前（例：大阪支店）" style="width:140px"><input type="text" id="startAddr" placeholder="住所" style="width:260px"><button class="btn" id="startAdd">追加</button></div>
+    </div>
+    <div class="panel">
+      <h2>保存フォルダ</h2>
+      <div id="folderInfo"></div>
+      <div class="muted" style="margin:6px 0">おすすめ：OneDrive の「EV社内用\滞納訪問」フォルダ（なければ作ってから選んでください）。中に「日報データ」「日報PDF」「まとめPDF」「ルート」を自動で作ります。</div>
+      <button class="btn" id="pickFolder2">フォルダを選ぶ</button>
+    </div>
+    <div class="panel">
+      <h2>担当者名</h2>
+      <div class="muted">ルート作成の担当者欄の候補になります（ルートを保存すると自動で追加）。</div>
+      <ul id="staffUl"></ul>
+    </div>
+  </div>
+</section>
+
+<div id="pdfStage"></div>
+<script src="common.js"></script>
+<script>
+// =============== 設定（このPCのブラウザに保存） ===============
+const SET_KEY = 'tv_pc_settings';
+let SET = Object.assign({ clients: TV.DEFAULT_CLIENTS.slice(), starts: [Object.assign({}, TV.DEFAULT_START)], staff: [], mode: 'driving' }, JSON.parse(localStorage.getItem(SET_KEY) || '{}'));
+const saveSet = () => localStorage.setItem(SET_KEY, JSON.stringify(SET));
+// 旧版の事務所住所（4-11-22）が保存されていたら正しい住所に直す
+SET.starts.forEach((s) => { if (TV.norm(s.address) === TV.norm('大阪府大阪市北区西天満4-11-22')) { s.address = TV.DEFAULT_START.address; delete s.lat; delete s.lng; saveSet(); } });
+const GEO_KEY = 'tv_geo_cache';
+const geoCache = JSON.parse(localStorage.getItem(GEO_KEY) || '{}');
+async function geocodeCached(addr) {
+  const k = TV.norm(addr);
+  if (geoCache[k]) return geoCache[k];
+  const g = await TV.geocode(k);
+  if (g) { geoCache[k] = g; localStorage.setItem(GEO_KEY, JSON.stringify(geoCache)); }
+  return g;
+}
+function addClient(name) {
+  name = TV.norm(name);
+  if (name && !SET.clients.includes(name)) { SET.clients.push(name); saveSet(); return true; }
+  return false;
+}
+
+// =============== 保存フォルダ（File System Access API） ===============
+const IDB = {
+  open() { return new Promise((ok, ng) => { const r = indexedDB.open('tainou-pc', 1); r.onupgradeneeded = () => r.result.createObjectStore('kv'); r.onsuccess = () => ok(r.result); r.onerror = () => ng(r.error); }); },
+  async get(k) { const db = await IDB.open(); return new Promise((ok) => { const q = db.transaction('kv').objectStore('kv').get(k); q.onsuccess = () => ok(q.result); q.onerror = () => ok(null); }); },
+  async set(k, v) { const db = await IDB.open(); return new Promise((ok, ng) => { const t = db.transaction('kv', 'readwrite'); t.objectStore('kv').put(v, k); t.oncomplete = ok; t.onerror = () => ng(t.error); }); },
+};
+let ROOT = null;       // 使えるフォルダ
+let ROOT_WAIT = null;  // 許可待ちのフォルダ
+
+async function initFolder() {
+  const h = await IDB.get('root');
+  if (h) {
+    const p = h.queryPermission ? await h.queryPermission({ mode: 'readwrite' }) : 'granted';
+    if (p === 'granted') ROOT = h; else ROOT_WAIT = h;
+  }
+  drawFolder();
+}
+async function pickFolder() {
+  if (!window.showDirectoryPicker) return alert('このブラウザではフォルダ保存が使えません。Chrome か Edge で開いてください。');
+  try {
+    const h = await window.showDirectoryPicker({ id: 'tainou', mode: 'readwrite' });
+    await setRoot(h);
+  } catch (e) { if (e.name !== 'AbortError') alert(e.message); }
+}
+async function setRoot(h) {
+  ROOT = h; ROOT_WAIT = null;
+  try { await IDB.set('root', h); } catch (e) {}
+  drawFolder(); await afterFolderReady();
+}
+async function regrant() {
+  const p = await ROOT_WAIT.requestPermission({ mode: 'readwrite' });
+  if (p === 'granted') { ROOT = ROOT_WAIT; ROOT_WAIT = null; drawFolder(); await afterFolderReady(); }
+}
+function drawFolder() {
+  const box = document.getElementById('folderBox'), info = document.getElementById('folderInfo');
+  if (ROOT) { box.innerHTML = '保存フォルダ：<b>' + TV.esc(ROOT.name) + '</b>'; info.innerHTML = '現在：<b>' + TV.esc(ROOT.name) + '</b>'; }
+  else if (ROOT_WAIT) { box.innerHTML = '保存フォルダ：' + TV.esc(ROOT_WAIT.name) + ' <button class="btn xs" id="regrant">使用を許可</button>'; info.textContent = '許可待ち：' + ROOT_WAIT.name; document.getElementById('regrant').onclick = regrant; }
+  else { box.innerHTML = '<span>保存フォルダ未設定</span> <button class="btn xs" id="pickFolder">フォルダを選ぶ</button>'; info.textContent = '未設定'; document.getElementById('pickFolder').onclick = pickFolder; }
+}
+function needFolder() {
+  if (ROOT) return true;
+  alert('先に保存フォルダを選んでください（右上の「フォルダを選ぶ」または「使用を許可」）。');
+  return false;
+}
+async function dirPath(parts, create) {
+  let d = ROOT;
+  for (const p of parts) d = await d.getDirectoryHandle(p, { create: !!create });
+  return d;
+}
+async function readJson(dir, name, fallback) {
+  try { const f = await (await dir.getFileHandle(name)).getFile(); return JSON.parse(await f.text()); }
+  catch (e) { return fallback; }
+}
+async function writeFile(dir, name, data) {
+  const fh = await dir.getFileHandle(name, { create: true });
+  const w = await fh.createWritable(); await w.write(data); await w.close();
+}
+async function exists(dir, name) { try { await dir.getFileHandle(name); return true; } catch (e) { return false; } }
+async function uniqueName(dir, base, ext) {
+  let n = base + ext, i = 2;
+  while (await exists(dir, n)) n = base + '_' + (i++) + ext;
+  return n;
+}
+
+// _管理.json（未訪問一覧）と _索引.json（検索用）
+let MANAGE = { pending: [] };
+let INDEX = { reports: [] };
+async function loadManage() { MANAGE = await readJson(ROOT, '_管理.json', { pending: [] }); }
+async function saveManage() { await writeFile(ROOT, '_管理.json', JSON.stringify(MANAGE, null, 1)); }
+async function loadIndex() { INDEX = await readJson(ROOT, '_索引.json', { reports: [] }); }
+async function saveIndex() { await writeFile(ROOT, '_索引.json', JSON.stringify(INDEX)); }
+async function afterFolderReady() {
+  await loadManage(); await loadIndex();
+  drawPending(); updatePendingBtn(); initSearchOptions(); runSearch();
+}
+
+function download(blob, name) {
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
+}
+
+// =============== タブ ===============
+document.querySelectorAll('nav button').forEach((b) => b.onclick = () => {
+  document.querySelectorAll('nav button').forEach((x) => x.classList.toggle('on', x === b));
+  document.querySelectorAll('.page').forEach((p) => p.classList.toggle('on', p.id === 'p-' + b.dataset.p));
+  if (b.dataset.p === 'route') setTimeout(() => map.invalidateSize(), 50);
+  if (b.dataset.p === 'search') { initSearchOptions(); runSearch(); }
+  if (b.dataset.p === 'settings') drawSettings();
+});
+
+// =============== ① ルート作成 ===============
+let CANDS = [];   // 候補 {..., targetId, lat, lng, checked, geoStatus, fromPending}
+let ROUTE = [];   // 並んだ訪問先
+let START = null; // 出発地点 {label,address,lat,lng}
+let pickTarget = null;
+
+const map = L.map('map').setView([34.69, 135.5], 11);
+L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png', { maxZoom: 18, attribution: '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank">国土地理院</a>' }).addTo(map);
+const layer = L.layerGroup().addTo(map);
+const icon = (cls, txt) => L.divIcon({ className: 'numIcon ' + cls, html: '<div>' + txt + '</div>', iconSize: [26, 26], iconAnchor: [13, 13] });
+
+map.on('click', (e) => {
+  if (!pickTarget) return;
+  const c = CANDS.find((x) => x.targetId === pickTarget);
+  if (c) { c.lat = e.latlng.lat; c.lng = e.latlng.lng; c.geoStatus = 'manual'; }
+  const r = ROUTE.find((x) => x.targetId === pickTarget);
+  if (r) { r.lat = e.latlng.lat; r.lng = e.latlng.lng; }
+  pickTarget = null; document.getElementById('map').style.cursor = '';
+  drawCands(); drawRoute();
+});
+
+function drawMap() {
+  layer.clearLayers();
+  const pts = [];
+  const inRoute = new Set(ROUTE.map((r) => r.targetId));
+  CANDS.filter((c) => c.lat != null && !inRoute.has(c.targetId)).forEach((c) => {
+    L.marker([c.lat, c.lng], { icon: icon('cand', '') }).bindTooltip(c.name + '（' + c.building + ' ' + c.room + '）').addTo(layer);
+    pts.push([c.lat, c.lng]);
+  });
+  if (START && START.lat != null) { L.marker([START.lat, START.lng], { icon: icon('start', '発') }).bindTooltip('出発：' + START.label).addTo(layer); pts.push([START.lat, START.lng]); }
+  const line = START && START.lat != null ? [[START.lat, START.lng]] : [];
+  ROUTE.forEach((r, i) => {
+    if (r.lat == null) return;
+    L.marker([r.lat, r.lng], { icon: icon('', i + 1) }).bindTooltip((i + 1) + '. ' + r.name + '（' + r.building + ' ' + r.room + '）').addTo(layer);
+    line.push([r.lat, r.lng]); pts.push([r.lat, r.lng]);
+  });
+  if (line.length > 1) L.polyline(line, { color: '#2e75b6', weight: 3, opacity: .7, dashArray: '6 6' }).addTo(layer);
+  if (pts.length) map.fitBounds(pts, { padding: [30, 30], maxZoom: 16 });
+}
+
+function drawCands() {
+  const tb = document.querySelector('#candTbl tbody');
+  tb.innerHTML = CANDS.map((c, i) => `<tr>
+    <td><input type="checkbox" data-i="${i}" ${c.checked ? 'checked' : ''}></td>
+    <td>${TV.esc(c.client)}${c.fromPending ? '<div class="muted">未訪問から</div>' : ''}</td>
+    <td>${TV.esc(c.name)}</td><td>${TV.esc(c.building)} ${TV.esc(c.room)}</td>
+    <td>${TV.esc(c.address)}</td>
+    <td>${c.geoStatus === 'wait' ? '…' : c.lat != null ? '<span class="good">○</span>' + (c.geoStatus === 'manual' ? '<div class="muted">手動</div>' : '') : '<span class="bad">×</span>'}</td>
+    <td><button class="btn xs sub" data-pick="${TV.esc(c.targetId)}">地図で指定</button></td></tr>`).join('');
+  tb.querySelectorAll('input[type=checkbox]').forEach((cb) => cb.onchange = () => { CANDS[+cb.dataset.i].checked = cb.checked; countCands(); });
+  tb.querySelectorAll('[data-pick]').forEach((b) => b.onclick = () => { pickTarget = b.dataset.pick; document.getElementById('map').style.cursor = 'crosshair'; alert('地図上の位置をクリックしてください。'); });
+  countCands(); drawMap();
+}
+function countCands() {
+  document.getElementById('candCount').textContent = CANDS.length ? '（' + CANDS.filter((c) => c.checked).length + ' / ' + CANDS.length + ' 人を選択中）' : '';
+}
+document.getElementById('checkAll').onchange = (e) => { CANDS.forEach((c) => c.checked = e.target.checked); drawCands(); };
+
+// Excel テンプレート
+document.getElementById('tplBtn').onclick = async () => {
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('対象者', { views: [{ state: 'frozen', ySplit: 1 }] });
+  const ls = wb.addWorksheet('依頼元一覧');
+  ws.columns = TV.COLUMNS.map((c) => ({ header: c.label, key: c.key, width: c.width }));
+  ws.getRow(1).eachCell((cell, n) => {
+    const req = TV.COLUMNS[n - 1].required;
+    cell.font = { bold: true, color: { argb: req ? 'FFFFFFFF' : 'FF1F4E79' } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: req ? 'FF1F4E79' : 'FFDDEBF7' } };
+    cell.alignment = { vertical: 'middle', horizontal: 'center' };
+  });
+  ls.getColumn(1).width = 24;
+  ls.getCell('A1').value = '依頼元'; ls.getCell('A1').font = { bold: true };
+  SET.clients.forEach((c, i) => ls.getCell('A' + (i + 2)).value = c);
+  ls.getCell('C1').value = 'ここに依頼元を書き足すと、対象者シートの選択肢に出ます（一覧にない名前を直接入力してもOK）。';
+  for (let r = 2; r <= 500; r++) {
+    ws.getCell('A' + r).dataValidation = { type: 'list', allowBlank: true, formulae: ['依頼元一覧!$A$2:$A$100'], showErrorMessage: true, errorStyle: 'information', errorTitle: '依頼元', error: '一覧にない依頼元です。このまま入力してよければ「OK」を押してください。' };
+    ws.getCell('B' + r).numFmt = '@'; ws.getCell('F' + r).numFmt = '@';
+    ws.getCell('H' + r).numFmt = '#,##0';
+    ws.getCell('H' + r).dataValidation = { type: 'decimal', allowBlank: true, operator: 'greaterThanOrEqual', formulae: [0], showErrorMessage: true, errorTitle: '滞納額', error: '数字で入力してください' };
+  }
+  ws.getCell('L1').value = '濃い青の列は必須です。案件番号がない場合は空欄で構いません（依頼元・対象者名・物件名・号室が同じ人を同一人物として扱います）。';
+  ws.getCell('L1').font = { color: { argb: 'FF666666' } };
+  const buf = await wb.xlsx.writeBuffer();
+  download(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), '訪問対象者_入力用.xlsx');
+};
+
+// Excel 読み込み
+function cellText(v) {
+  if (v == null) return '';
+  if (typeof v === 'object') {
+    if (v instanceof Date) return TV.ymd(v, '/');
+    if (v.richText) return v.richText.map((t) => t.text).join('');
+    if (v.text != null) return String(v.text);
+    if (v.result != null) return String(v.result);
+    if (v.hyperlink) return String(v.text || v.hyperlink);
+    return '';
+  }
+  return String(v);
+}
+async function loadExcel(file) {
+  const msg = document.getElementById('excelMsg');
+  const wb = new ExcelJS.Workbook();
+  try { await wb.xlsx.load(await file.arrayBuffer()); } catch (e) { msg.innerHTML = '<span class="bad">Excelを読めませんでした：' + TV.esc(e.message) + '</span>'; return; }
+  const ws = wb.getWorksheet('対象者') || wb.worksheets[0];
+  let headRow = 0, map_ = {};
+  for (let r = 1; r <= 5 && !headRow; r++) {
+    const vals = {};
+    ws.getRow(r).eachCell((cell, n) => vals[TV.norm(cellText(cell.value))] = n);
+    if (vals['対象者名'] && vals['住所']) { headRow = r; TV.COLUMNS.forEach((c) => { if (vals[c.label]) map_[c.key] = vals[c.label]; }); }
+  }
+  if (!headRow) { msg.innerHTML = '<span class="bad">見出し（対象者名・住所など）が見つかりません。テンプレートの形で入力してください。</span>'; return; }
+  const errors = [], dups = [], newClients = [];
+  let added = 0;
+  const have = new Set(CANDS.map((c) => c.targetId));
+  for (let r = headRow + 1; r <= ws.rowCount; r++) {
+    const row = ws.getRow(r);
+    const t = {};
+    TV.COLUMNS.forEach((c) => t[c.key] = map_[c.key] ? TV.norm(cellText(row.getCell(map_[c.key]).value)) : '');
+    if (!Object.values(t).some((v) => v)) continue;
+    const miss = TV.COLUMNS.filter((c) => c.required && !t[c.key]).map((c) => c.label);
+    if (miss.length) { errors.push(r + '行目：' + miss.join('・') + 'が空欄'); continue; }
+    t.arrears = t.arrears ? Number(String(t.arrears).replace(/[,円]/g, '')) : '';
+    if (t.arrears !== '' && isNaN(t.arrears)) t.arrears = '';
+    t.targetId = TV.targetId(t);
+    if (have.has(t.targetId)) { dups.push(r + '行目：' + t.name + '（すでにあります）'); continue; }
+    have.add(t.targetId);
+    if (addClient(t.client)) newClients.push(t.client);
+    Object.assign(t, { lat: null, lng: null, checked: true, geoStatus: 'wait' });
+    CANDS.push(t); added++;
+  }
+  let html = '<b>' + added + '人を読み込みました。</b>';
+  if (newClients.length) html += '<div>依頼元の一覧に追加：' + TV.esc(newClients.join('、')) + '</div>';
+  if (errors.length) html += '<div class="bad">読み込めなかった行：<br>' + errors.map(TV.esc).join('<br>') + '</div>';
+  if (dups.length) html += '<div class="bad">重複のため飛ばした行：<br>' + dups.map(TV.esc).join('<br>') + '</div>';
+  msg.innerHTML = html;
+  drawCands();
+  await geocodeAll();
+}
+async function geocodeAll() {
+  for (const c of CANDS) {
+    if (c.lat != null || c.geoStatus === 'fail') { if (c.geoStatus === 'wait') c.geoStatus = 'ok'; continue; }
+    try {
+      const g = await geocodeCached(c.address);
+      if (g) { c.lat = g.lat; c.lng = g.lng; c.geoStatus = 'ok'; } else c.geoStatus = 'fail';
+    } catch (e) { c.geoStatus = 'fail'; }
+    drawCands();
+  }
+  drawCands();
+}
+const excelDrop = document.getElementById('excelDrop'), excelFile = document.getElementById('excelFile');
+excelDrop.onclick = () => excelFile.click();
+excelFile.onchange = () => { if (excelFile.files[0]) loadExcel(excelFile.files[0]); excelFile.value = ''; };
+dropZone(excelDrop, (files) => files[0] && loadExcel(files[0]));
+function dropZone(el, cb) {
+  el.ondragover = (e) => { e.preventDefault(); el.classList.add('over'); };
+  el.ondragleave = () => el.classList.remove('over');
+  el.ondrop = (e) => { e.preventDefault(); el.classList.remove('over'); cb([...e.dataTransfer.files]); };
+}
+
+// 未訪問一覧から追加
+function updatePendingBtn() {
+  document.getElementById('pendingBtn').textContent = '未訪問一覧から追加（' + (ROOT ? MANAGE.pending.length : '-') + '件）';
+}
+document.getElementById('pendingBtn').onclick = async () => {
+  if (!needFolder()) return;
+  await loadManage();
+  const have = new Set(CANDS.map((c) => c.targetId));
+  let n = 0;
+  MANAGE.pending.forEach((p) => {
+    if (have.has(p.targetId)) return;
+    CANDS.push(Object.assign({}, p, { checked: true, fromPending: true, geoStatus: p.lat != null ? 'ok' : 'wait' })); n++;
+  });
+  document.getElementById('excelMsg').innerHTML = '<b>未訪問一覧から' + n + '人を追加しました。</b>';
+  drawCands(); geocodeAll();
+};
+
+// ルート条件
+function fillRouteForm() {
+  document.getElementById('rDate').value = document.getElementById('rDate').value || TV.ymd(null, '-');
+  document.getElementById('rMode').innerHTML = Object.entries(TV.MODES).map(([k, v]) => '<option value="' + k + '"' + (k === SET.mode ? ' selected' : '') + '>' + v + '</option>').join('');
+  const sel = document.getElementById('rStart'), cur = sel.value;
+  sel.innerHTML = SET.starts.map((s, i) => '<option value="' + i + '">' + TV.esc(s.label) + '（' + TV.esc(s.address) + '）</option>').join('') + '<option value="other">その他の住所を入れる</option>';
+  if (cur) sel.value = cur;
+  document.getElementById('staffList').innerHTML = SET.staff.map((s) => '<option value="' + TV.esc(s) + '">').join('');
+}
+document.getElementById('rStart').onchange = (e) => { document.getElementById('rStartOtherBox').style.display = e.target.value === 'other' ? '' : 'none'; };
+async function resolveStart() {
+  const v = document.getElementById('rStart').value;
+  let s;
+  if (v === 'other') {
+    const a = TV.norm(document.getElementById('rStartOther').value);
+    if (!a) { alert('出発地点の住所を入れてください。'); return null; }
+    s = { label: a, address: a };
+  } else s = SET.starts[+v];
+  if (s.lat == null) {
+    const g = await geocodeCached(s.address).catch(() => null);
+    if (!g) { alert('出発地点の住所が地図で見つかりません：' + s.address); return null; }
+    s.lat = g.lat; s.lng = g.lng; if (v !== 'other') saveSet();
+  }
+  return s;
+}
+document.getElementById('buildBtn').onclick = async () => {
+  const sel = CANDS.filter((c) => c.checked);
+  if (!sel.length) return alert('訪問する人にチェックを付けてください。');
+  if (CANDS.some((c) => c.geoStatus === 'wait')) return alert('住所の位置を調べている途中です。少し待ってからもう一度押してください。');
+  START = await resolveStart(); if (!START) return;
+  ROUTE = TV.orderStops(START, sel.map((c) => Object.assign({}, c)));
+  const noPos = ROUTE.filter((r) => r.lat == null).length;
+  if (noPos) alert('位置が分からない人が' + noPos + '人います。ルートの最後に入れました。［地図で指定］で位置を決めてから［近い順に並べ直す］を押してください。');
+  drawRoute();
+};
+document.getElementById('reorderBtn').onclick = async () => {
+  if (!ROUTE.length) return;
+  START = await resolveStart(); if (!START) return;
+  ROUTE = TV.orderStops(START, ROUTE); drawRoute();
+};
+let dragIdx = null;
+function drawRoute() {
+  const ol = document.getElementById('routeList');
+  ol.innerHTML = ROUTE.map((r, i) => `<li draggable="true" data-i="${i}">
+    <div class="n">${i + 1}</div>
+    <div class="b"><b>${TV.esc(r.name)}</b>　${TV.esc(r.building)} ${TV.esc(r.room)}　<span class="tagr">${TV.esc(r.client)}</span>
+    <div class="muted">${TV.esc(r.address)}${r.lat == null ? ' <span class="bad">（位置不明）</span>' : ''}</div></div>
+    <button class="btn xs sub" data-up="${i}">↑</button><button class="btn xs sub" data-down="${i}">↓</button><button class="btn xs warn" data-rm="${i}">外す</button></li>`).join('') || '<span class="muted">まだルートがありません。</span>';
+  ol.querySelectorAll('li').forEach((li) => {
+    li.ondragstart = () => { dragIdx = +li.dataset.i; li.classList.add('dragging'); };
+    li.ondragend = () => li.classList.remove('dragging');
+    li.ondragover = (e) => e.preventDefault();
+    li.ondrop = (e) => { e.preventDefault(); const to = +li.dataset.i; if (dragIdx == null || dragIdx === to) return; const [m] = ROUTE.splice(dragIdx, 1); ROUTE.splice(to, 0, m); dragIdx = null; drawRoute(); };
+  });
+  ol.querySelectorAll('[data-up]').forEach((b) => b.onclick = () => { const i = +b.dataset.up; if (i > 0) { [ROUTE[i - 1], ROUTE[i]] = [ROUTE[i], ROUTE[i - 1]]; drawRoute(); } });
+  ol.querySelectorAll('[data-down]').forEach((b) => b.onclick = () => { const i = +b.dataset.down; if (i < ROUTE.length - 1) { [ROUTE[i + 1], ROUTE[i]] = [ROUTE[i], ROUTE[i + 1]]; drawRoute(); } });
+  ol.querySelectorAll('[data-rm]').forEach((b) => b.onclick = () => { ROUTE.splice(+b.dataset.rm, 1); drawRoute(); });
+  document.getElementById('routeInfo').textContent = ROUTE.length && START ? '（' + ROUTE.length + '件・直線距離で約' + TV.routeLengthKm(START, ROUTE).toFixed(1) + 'km）' : '';
+  drawMap();
+}
+
+document.getElementById('saveRouteBtn').onclick = async () => {
+  if (!ROUTE.length) return alert('先にルートを組んでください。');
+  const staff = TV.norm(document.getElementById('rStaff').value);
+  if (!staff) return alert('担当者を入れてください。');
+  const date = document.getElementById('rDate').value;
+  if (!date) return alert('訪問日を入れてください。');
+  const mode = document.getElementById('rMode').value;
+  const keep = ['targetId', 'client', 'caseNo', 'name', 'kana', 'building', 'room', 'address', 'arrears', 'phone', 'note', 'lat', 'lng'];
+  const route = {
+    type: TV.ROUTE_TYPE, version: 1, appVersion: TV.APP_VERSION,
+    routeId: TV.uuid(), createdAt: new Date().toISOString(), date, staff, mode,
+    start: { label: START.label, address: START.address, lat: START.lat, lng: START.lng },
+    stops: ROUTE.map((r, i) => { const o = { order: i + 1 }; keep.forEach((k) => o[k] = r[k] == null ? '' : r[k]); if (r.lat == null) { o.lat = null; o.lng = null; } return o; }),
+  };
+  const name = 'ルート_' + date.replace(/-/g, '') + '_' + TV.safeFileName(staff) + '.json';
+  const blob = new Blob([JSON.stringify(route)], { type: 'application/json' });
+  download(blob, name);
+  if (!SET.staff.includes(staff)) SET.staff.push(staff);
+  SET.mode = mode; saveSet(); fillRouteForm();
+  let extra = '';
+  if (ROOT) {
+    try {
+      const dir = await dirPath(['ルート', date.slice(0, 7)], true);
+      const fn = await uniqueName(dir, name.replace(/\.json$/, ''), '.json');
+      await writeFile(dir, fn, blob);
+      await loadManage();
+      const ids = new Set(route.stops.map((s) => s.targetId));
+      const before = MANAGE.pending.length;
+      MANAGE.pending = MANAGE.pending.filter((p) => !ids.has(p.targetId));
+      await saveManage(); drawPending(); updatePendingBtn();
+      extra = '\nフォルダの「ルート\\' + date.slice(0, 7) + '」にも保存しました。' + (before !== MANAGE.pending.length ? '\n未訪問一覧から' + (before - MANAGE.pending.length) + '人をこのルートに移しました。' : '');
+    } catch (e) { extra = '\n（フォルダへの保存は失敗しました：' + e.message + '）'; }
+  }
+  alert('「' + name + '」をダウンロードしました。\nこのファイルを担当者の携帯にメールで送ってください。' + extra);
+};
+
+// =============== ② 日報取込・PDF ===============
+const logBox = document.getElementById('importLog');
+const log = (s) => { logBox.textContent += s + '\n'; logBox.scrollTop = 1e9; };
+const repDrop = document.getElementById('repDrop'), repFile = document.getElementById('repFile');
+repDrop.onclick = () => repFile.click();
+repFile.onchange = () => { importFiles([...repFile.files]); repFile.value = ''; };
+dropZone(repDrop, importFiles);
+
+let importing = false;
+async function importFiles(files) {
+  if (!files.length || !needFolder()) return;
+  if (importing) return alert('取り込み中です。終わるまでお待ちください。');
+  importing = true; logBox.textContent = '';
+  try {
+    await loadIndex(); await loadManage();
+    for (const f of files) {
+      try { await importOne(f); } catch (e) { log('× ' + f.name + '：' + e.message); console.error(e); }
+    }
+    await saveIndex(); await saveManage();
+    drawPending(); updatePendingBtn(); initSearchOptions();
+    log('\n終わりました。');
+  } finally { importing = false; }
+}
+
+async function importOne(file) {
+  let p;
+  try { p = JSON.parse(await file.text()); } catch (e) { throw new Error('ファイルを読めません'); }
+  if (p.type !== TV.REPORT_TYPE) throw new Error('日報データではありません');
+  const month = (p.routeDate || TV.ymd(p.exportedAt, '-')).slice(0, 7);
+  const known = new Set(INDEX.reports.map((r) => r.reportId));
+  const fresh = p.reports.filter((r) => !known.has(r.reportId));
+  const changed = p.reports.filter((r) => { const k = INDEX.reports.find((x) => x.reportId === r.reportId); return k && k.savedAt !== r.savedAt; });
+  log('■ ' + file.name + '（日報' + p.reports.length + '件／未訪問' + p.unvisited.length + '件）');
+  if (!fresh.length && !changed.length) log('  新しい日報はありません（取り込み済み）。');
+
+  // 1) データ保存
+  const dataDir = await dirPath(['日報データ', month], true);
+  let dataName = file.name.replace(/[\\/:*?"<>|]/g, '_');
+  if (!/\.json$/i.test(dataName)) dataName += '.json';
+  const old = await readJson(dataDir, dataName, null);
+  if (old) {
+    const oldIds = (old.reports || []).map((r) => r.reportId);
+    const newIds = new Set(p.reports.map((r) => r.reportId));
+    if (!oldIds.every((id) => newIds.has(id))) dataName = await uniqueName(dataDir, dataName.replace(/\.json$/i, ''), '.json');
+  }
+  await writeFile(dataDir, dataName, JSON.stringify(p));
+  const dataPath = '日報データ/' + month + '/' + dataName;
+
+  // 2) 1訪問ごとのPDF（新規・修正分）
+  p.reports.forEach((r) => r.target && addClient(r.target.client));
+  for (const r of fresh.concat(changed)) {
+    const d = new Date(r.visitedAt);
+    const pdfMonth = TV.ymd(d, '-').slice(0, 7);
+    const pdfDir = await dirPath(['日報PDF', pdfMonth], true);
+    const t = r.target || {};
+    const base = [TV.ymd(d), t.client, t.name, (t.building || '') + (t.room || ''), r.result].map(TV.safeFileName).join('_');
+    const prev = INDEX.reports.find((x) => x.reportId === r.reportId);
+    let pdfName;
+    if (prev && prev.pdf && prev.pdf.startsWith('日報PDF/' + pdfMonth + '/')) pdfName = prev.pdf.split('/').pop();
+    else pdfName = await uniqueName(pdfDir, base, '.pdf');
+    const blob = await renderPdf(visitHtml(r, t, p));
+    await writeFile(pdfDir, pdfName, blob);
+    const entry = indexEntry(r, t, p, dataPath, '日報PDF/' + pdfMonth + '/' + pdfName);
+    if (prev) Object.assign(prev, entry); else INDEX.reports.push(entry);
+    log('  ' + (prev ? '修正' : '追加') + '：' + TV.dateTimeText(r.visitedAt) + ' ' + (t.name || '') + ' ' + r.result + ' → ' + pdfName);
+  }
+  // 既存分もデータの場所を更新
+  p.reports.forEach((r) => { const e = INDEX.reports.find((x) => x.reportId === r.reportId); if (e) e.file = dataPath; });
+
+  // 3) 1日のまとめPDF
+  const sumDir = await dirPath(['まとめPDF', month], true);
+  const sumName = 'まとめ_' + (p.routeDate || '').replace(/-/g, '') + '_' + TV.safeFileName(p.staff) + '.pdf';
+  await writeFile(sumDir, sumName, await renderPdf(summaryHtml(p)));
+  log('  まとめPDF：' + sumName);
+
+  // 4) 未訪問一覧の更新
+  const visited = new Set(p.reports.map((r) => r.targetId));
+  const before = MANAGE.pending.length;
+  MANAGE.pending = MANAGE.pending.filter((x) => !visited.has(x.targetId));
+  const removed = before - MANAGE.pending.length;
+  let addedN = 0;
+  p.unvisited.forEach((u) => {
+    if (visited.has(u.targetId) || MANAGE.pending.some((x) => x.targetId === u.targetId)) return;
+    if (INDEX.reports.some((x) => x.targetId === u.targetId && x.visitedAt.slice(0, 10) > (p.routeDate || ''))) return;
+    MANAGE.pending.push(Object.assign({}, u, { missedDate: p.routeDate, missedStaff: p.staff }));
+    addedN++;
+  });
+  if (addedN) log('  未訪問一覧に追加：' + addedN + '人');
+  if (removed) log('  訪問済みのため未訪問一覧から外した人：' + removed + '人');
+}
+
+function indexEntry(r, t, p, file, pdf) {
+  return {
+    reportId: r.reportId, targetId: r.targetId, savedAt: r.savedAt, visitedAt: r.visitedAt, staff: r.staff || p.staff,
+    result: r.result, contact: r.contact, signs: r.signs || [], promiseDate: r.promiseDate, promiseAmount: r.promiseAmount,
+    nextAction: r.nextAction, memo: r.memo, photoCount: (r.photos || []).length, added: !!t.added,
+    target: { client: t.client, caseNo: t.caseNo, name: t.name, kana: t.kana, building: t.building, room: t.room, address: t.address, arrears: t.arrears, phone: t.phone, note: t.note },
+    routeDate: p.routeDate, file, pdf,
+  };
+}
+
+// ---- PDF の中身 ----
+function visitHtml(r, t, p) {
+  const row = (k, v) => '<tr><th>' + k + '</th><td>' + (v || '') + '</td></tr>';
+  const e = TV.esc;
+  const promise = [r.promiseDate ? r.promiseDate.replace(/-/g, '/') : '', r.promiseAmount ? TV.yen(r.promiseAmount) : ''].filter(Boolean).join('　');
+  return `<div class="pdfPage">
+    <h1>訪 問 日 報</h1>
+    <div class="sub">${e(TV.dateTimeText(r.visitedAt))}　担当：${e(r.staff || p.staff)}${t.added ? '　（ルート外の追加訪問）' : ''}</div>
+    <table>
+      ${row('依頼元', e(t.client))}
+      ${row('案件番号', e(t.caseNo))}
+      ${row('対象者名', e(t.name) + (t.kana ? '（' + e(t.kana) + '）' : ''))}
+      ${row('物件名・号室', e(t.building) + '　' + e(t.room))}
+      ${row('住所', e(t.address))}
+      ${row('滞納額', e(TV.yen(t.arrears)))}
+      ${row('電話番号', e(t.phone))}
+      ${row('備考', e(t.note))}
+    </table>
+    <table>
+      ${row('訪問結果', '<b>' + e(r.result) + '</b>')}
+      ${row('面談相手', e(r.contact))}
+      ${row('現地の様子', e((r.signs || []).join('、')))}
+      ${row('支払約束', e(promise))}
+      ${row('次回アクション', e(r.nextAction))}
+      <tr><th>メモ</th><td class="memo">${e(r.memo)}</td></tr>
+    </table>
+    ${(r.photos || []).length ? '<div><b>写真</b></div><div class="imgs">' + r.photos.map((ph) => '<img src="' + ph + '">').join('') + '</div>' : ''}
+    <div class="foot">出力 ${TV.dateTimeText(new Date())}　日報ID ${e(r.reportId)}</div>
+  </div>`;
+}
+function summaryHtml(p) {
+  const e = TV.esc;
+  const reps = p.reports.slice().sort((a, b) => a.visitedAt.localeCompare(b.visitedAt));
+  const cnt = {}; reps.forEach((r) => cnt[r.result] = (cnt[r.result] || 0) + 1);
+  return `<div class="pdfPage sum">
+    <h1>訪問日報（まとめ）</h1>
+    <div class="sub">${e((p.routeDate || '').replace(/-/g, '/'))}　担当：${e(p.staff)}　移動：${e(TV.MODES[p.mode] || p.mode || '')}</div>
+    <div style="margin-bottom:8px">訪問 ${reps.length}件（${Object.entries(cnt).map(([k, v]) => e(k) + ' ' + v).join('／') || 'なし'}）　未訪問 ${p.unvisited.length}件</div>
+    <table><thead><tr><th>No</th><th>時刻</th><th>依頼元</th><th>対象者</th><th>物件・号室</th><th>結果</th><th>面談相手</th><th>現地の様子</th><th>支払約束</th><th>次回</th><th>メモ</th></tr></thead><tbody>
+    ${reps.map((r, i) => { const t = r.target || {}; return `<tr><td>${i + 1}</td><td>${TV.hm(r.visitedAt)}</td><td>${e(t.client)}</td><td>${e(t.name)}${t.added ? '<br>(追加)' : ''}</td><td>${e(t.building)} ${e(t.room)}</td><td>${e(r.result)}</td><td>${e(r.contact)}</td><td>${e((r.signs || []).join('、'))}</td><td>${e([r.promiseDate ? r.promiseDate.replace(/-/g, '/') : '', r.promiseAmount ? TV.yen(r.promiseAmount) : ''].filter(Boolean).join(' '))}</td><td>${e(r.nextAction)}</td><td style="white-space:pre-wrap">${e(r.memo)}</td></tr>`; }).join('')}
+    </tbody></table>
+    ${p.unvisited.length ? '<div><b>未訪問</b></div><table><thead><tr><th>依頼元</th><th>対象者</th><th>物件・号室</th><th>住所</th></tr></thead><tbody>' + p.unvisited.map((u) => '<tr><td>' + e(u.client) + '</td><td>' + e(u.name) + '</td><td>' + e(u.building) + ' ' + e(u.room) + '</td><td>' + e(u.address) + '</td></tr>').join('') + '</tbody></table>' : ''}
+    <div class="foot">出力 ${TV.dateTimeText(new Date())}</div>
+  </div>`;
+}
+// HTML を画像にして A4 PDF にする（長いときはページを分ける）
+async function renderPdf(html) {
+  const stage = document.getElementById('pdfStage');
+  stage.innerHTML = html;
+  const el = stage.firstElementChild;
+  await Promise.all([...el.querySelectorAll('img')].map((img) => img.complete ? 0 : new Promise((ok) => { img.onload = img.onerror = ok; })));
+  const canvas = await html2canvas(el, { scale: 2, backgroundColor: '#ffffff' });
+  stage.innerHTML = '';
+  const { jsPDF } = window.jspdf;
+  const pdf = new jsPDF({ orientation: 'p', unit: 'mm', format: 'a4', compress: true });
+  const pageH = Math.floor(canvas.width * 297 / 210);
+  for (let y = 0, page = 0; y < canvas.height; y += pageH, page++) {
+    const h = Math.min(pageH, canvas.height - y);
+    const pc = document.createElement('canvas'); pc.width = canvas.width; pc.height = h;
+    const ctx = pc.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, pc.width, h);
+    ctx.drawImage(canvas, 0, y, canvas.width, h, 0, 0, canvas.width, h);
+    if (page) pdf.addPage();
+    pdf.addImage(pc.toDataURL('image/jpeg', 0.85), 'JPEG', 0, 0, 210, h * 210 / canvas.width);
+  }
+  return pdf.output('blob');
+}
+
+function drawPending() {
+  const tb = document.querySelector('#pendTbl tbody');
+  if (!ROOT) { tb.innerHTML = '<tr><td colspan="7" class="muted">保存フォルダを選ぶと表示されます。</td></tr>'; return; }
+  tb.innerHTML = MANAGE.pending.map((p, i) => `<tr><td>${TV.esc((p.missedDate || '').replace(/-/g, '/'))}</td><td>${TV.esc(p.missedStaff || '')}</td><td>${TV.esc(p.client)}</td><td>${TV.esc(p.name)}</td><td>${TV.esc(p.building)} ${TV.esc(p.room)}</td><td>${TV.esc(p.address)}</td><td><button class="btn xs warn" data-del="${i}">一覧から外す</button></td></tr>`).join('') || '<tr><td colspan="7" class="muted">未訪問の人はいません。</td></tr>';
+  tb.querySelectorAll('[data-del]').forEach((b) => b.onclick = async () => {
+    const p = MANAGE.pending[+b.dataset.del];
+    if (!confirm(p.name + ' さんを未訪問一覧から外しますか？（もう訪問しない場合）')) return;
+    MANAGE.pending.splice(+b.dataset.del, 1); await saveManage(); drawPending(); updatePendingBtn();
+  });
+}
+
+// =============== ③ 履歴検索 ===============
+function initSearchOptions() {
+  const opt = (id, list, all) => { const s = document.getElementById(id), cur = s.value; s.innerHTML = '<option value="">' + all + '</option>' + list.map((v) => '<option>' + TV.esc(v) + '</option>').join(''); s.value = cur; };
+  const uniq = (f) => [...new Set(INDEX.reports.map(f).filter(Boolean))].sort();
+  opt('qClient', [...new Set(SET.clients.concat(uniq((r) => r.target.client)))], 'すべて');
+  opt('qResult', TV.RESULTS, 'すべて');
+  opt('qStaff', uniq((r) => r.staff), 'すべて');
+}
+let SEL_TARGET = null;
+function runSearch() {
+  const tb = document.querySelector('#resTbl tbody');
+  if (!ROOT) { tb.innerHTML = '<tr><td colspan="7" class="muted">保存フォルダを選ぶと検索できます。</td></tr>'; document.getElementById('qCount').textContent = ''; return; }
+  const words = TV.norm(document.getElementById('qText').value).toLowerCase().split(' ').filter(Boolean);
+  const qc = document.getElementById('qClient').value, qr = document.getElementById('qResult').value, qs = document.getElementById('qStaff').value;
+  const qf = document.getElementById('qFrom').value, qt = document.getElementById('qTo').value;
+  const res = INDEX.reports.filter((r) => {
+    const t = r.target;
+    if (SEL_TARGET && r.targetId !== SEL_TARGET) return false;
+    if (qc && t.client !== qc) return false;
+    if (qr && r.result !== qr) return false;
+    if (qs && r.staff !== qs) return false;
+    const day = TV.ymd(r.visitedAt, '-');
+    if (qf && day < qf) return false;
+    if (qt && day > qt) return false;
+    if (words.length) {
+      const hay = TV.norm([t.name, t.kana, t.address, t.building, t.room, t.caseNo, r.memo, (r.signs || []).join(' ')].join(' ')).toLowerCase().replace(/\s/g, '');
+      if (!words.every((w) => hay.includes(w.replace(/\s/g, '')))) return false;
+    }
+    return true;
+  }).sort((a, b) => b.visitedAt.localeCompare(a.visitedAt));
+  document.getElementById('qCount').innerHTML = res.length + '件' + (SEL_TARGET ? '　<span class="tagr">1人の履歴だけ表示中</span> <button class="btn xs sub" id="unsel">解除</button>' : '');
+  const us = document.getElementById('unsel'); if (us) us.onclick = () => { SEL_TARGET = null; runSearch(); };
+  tb.innerHTML = res.slice(0, 500).map((r) => `<tr class="click" data-id="${r.reportId}"><td>${TV.dateTimeText(r.visitedAt)}</td><td>${TV.esc(r.target.client)}</td><td>${TV.esc(r.target.name)}</td><td>${TV.esc(r.target.building)} ${TV.esc(r.target.room)}</td><td>${TV.esc(r.result)}</td><td>${TV.esc(r.nextAction)}</td><td>${TV.esc(r.staff)}</td></tr>`).join('') || '<tr><td colspan="7" class="muted">見つかりません。</td></tr>';
+  tb.querySelectorAll('tr.click').forEach((tr) => tr.onclick = () => { tb.querySelectorAll('tr').forEach((x) => x.classList.remove('sel')); tr.classList.add('sel'); showDetail(tr.dataset.id); });
+}
+['qText', 'qClient', 'qResult', 'qStaff', 'qFrom', 'qTo'].forEach((id) => document.getElementById(id).oninput = runSearch);
+document.getElementById('qClear').onclick = () => { ['qText', 'qClient', 'qResult', 'qStaff', 'qFrom', 'qTo'].forEach((id) => document.getElementById(id).value = ''); SEL_TARGET = null; runSearch(); };
+
+async function fileByPath(path) {
+  const parts = path.split('/'); const name = parts.pop();
+  const dir = await dirPath(parts, false);
+  return (await dir.getFileHandle(name)).getFile();
+}
+async function showDetail(id) {
+  const r = INDEX.reports.find((x) => x.reportId === id); if (!r) return;
+  const t = r.target, e = TV.esc;
+  const box = document.getElementById('detailBox');
+  const n = INDEX.reports.filter((x) => x.targetId === r.targetId).length;
+  box.innerHTML = `<h2 style="margin-top:0">${e(t.name)} <span class="muted">${e(t.kana || '')}</span></h2>
+    <div>${e(t.building)} ${e(t.room)}　<span class="tagr">${e(t.client)}</span>${t.caseNo ? '<span class="tagr">案件 ' + e(t.caseNo) + '</span>' : ''}</div>
+    <div class="muted">${e(t.address)}</div>
+    <div style="margin:6px 0">滞納額：${e(TV.yen(t.arrears))}　電話：${e(t.phone || '')}</div>
+    <table style="margin-top:8px">
+      <tr><th style="width:110px">訪問日時</th><td>${TV.dateTimeText(r.visitedAt)}（担当 ${e(r.staff)}）</td></tr>
+      <tr><th>訪問結果</th><td><b>${e(r.result)}</b>${r.contact ? '（' + e(r.contact) + '）' : ''}</td></tr>
+      <tr><th>現地の様子</th><td>${e((r.signs || []).join('、'))}</td></tr>
+      <tr><th>支払約束</th><td>${e([r.promiseDate ? r.promiseDate.replace(/-/g, '/') : '', r.promiseAmount ? TV.yen(r.promiseAmount) : ''].filter(Boolean).join('　'))}</td></tr>
+      <tr><th>次回アクション</th><td>${e(r.nextAction)}</td></tr>
+      <tr><th>メモ</th><td class="detail">${e(r.memo)}</td></tr>
+      <tr><th>備考</th><td>${e(t.note || '')}</td></tr>
+    </table>
+    <div class="photosRow" id="dPhotos">${r.photoCount ? '<span class="muted">写真を読み込み中…</span>' : ''}</div>
+    <div style="margin-top:10px; display:flex; gap:8px">
+      <button class="btn" id="openPdf">PDFを開く</button>
+      <button class="btn sub" id="onlyThis">この人の訪問履歴（${n}件）</button>
+    </div>`;
+  document.getElementById('openPdf').onclick = async () => {
+    try { const f = await fileByPath(r.pdf); window.open(URL.createObjectURL(f), '_blank'); }
+    catch (err) { alert('PDFが見つかりません：' + r.pdf); }
+  };
+  document.getElementById('onlyThis').onclick = () => { SEL_TARGET = r.targetId; runSearch(); };
+  if (r.photoCount) {
+    try {
+      const data = JSON.parse(await (await fileByPath(r.file)).text());
+      const full = data.reports.find((x) => x.reportId === id);
+      document.getElementById('dPhotos').innerHTML = (full.photos || []).map((p) => '<a href="' + p + '" target="_blank"><img src="' + p + '"></a>').join('');
+    } catch (err) { document.getElementById('dPhotos').innerHTML = '<span class="bad">写真を読み込めませんでした</span>'; }
+  }
+}
+
+// 索引を作り直す（日報データフォルダを全部読む）
+document.getElementById('rebuildBtn').onclick = async () => {
+  if (!needFolder()) return;
+  if (!confirm('「日報データ」フォルダを全部読み直して、検索用の索引を作り直します。よろしいですか？')) return;
+  const keepPdf = Object.fromEntries(INDEX.reports.map((r) => [r.reportId, r.pdf]));
+  const out = [];
+  let dataDir;
+  try { dataDir = await dirPath(['日報データ'], false); } catch (e) { return alert('「日報データ」フォルダがありません。'); }
+  for await (const [mname, mdir] of dataDir.entries()) {
+    if (mdir.kind !== 'directory') continue;
+    for await (const [fname, fh] of mdir.entries()) {
+      if (fh.kind !== 'file' || !/\.json$/i.test(fname)) continue;
+      try {
+        const p = JSON.parse(await (await fh.getFile()).text());
+        if (p.type !== TV.REPORT_TYPE) continue;
+        p.reports.forEach((r) => {
+          const e = indexEntry(r, r.target || {}, p, '日報データ/' + mname + '/' + fname, keepPdf[r.reportId] || '');
+          const i = out.findIndex((x) => x.reportId === r.reportId);
+          if (i < 0) out.push(e); else if ((out[i].savedAt || '') < (e.savedAt || '')) out[i] = e;
+        });
+      } catch (e) { console.warn(fname, e); }
+    }
+  }
+  INDEX = { reports: out }; await saveIndex(); initSearchOptions(); runSearch();
+  alert('索引を作り直しました（' + out.length + '件）。');
+};
+
+// =============== ④ 設定 ===============
+function drawSettings() {
+  const cu = document.getElementById('clientUl');
+  cu.innerHTML = SET.clients.map((c, i) => '<li>' + TV.esc(c) + ' <button class="btn xs warn" data-i="' + i + '">削除</button></li>').join('');
+  cu.querySelectorAll('button').forEach((b) => b.onclick = () => { SET.clients.splice(+b.dataset.i, 1); saveSet(); drawSettings(); });
+  const su = document.getElementById('startUl');
+  su.innerHTML = SET.starts.map((s, i) => '<li><b>' + TV.esc(s.label) + '</b>　' + TV.esc(s.address) + (i === 0 ? '　<span class="tagr">初期値</span>' : ' <button class="btn xs sub" data-top="' + i + '">初期値にする</button>') + (SET.starts.length > 1 ? ' <button class="btn xs warn" data-i="' + i + '">削除</button>' : '') + '</li>').join('');
+  su.querySelectorAll('[data-i]').forEach((b) => b.onclick = () => { SET.starts.splice(+b.dataset.i, 1); saveSet(); drawSettings(); fillRouteForm(); });
+  su.querySelectorAll('[data-top]').forEach((b) => b.onclick = () => { const [s] = SET.starts.splice(+b.dataset.top, 1); SET.starts.unshift(s); saveSet(); drawSettings(); document.getElementById('rStart').value = '0'; fillRouteForm(); });
+  const stu = document.getElementById('staffUl');
+  stu.innerHTML = SET.staff.map((s, i) => '<li>' + TV.esc(s) + ' <button class="btn xs warn" data-i="' + i + '">削除</button></li>').join('') || '<li class="muted">まだありません</li>';
+  stu.querySelectorAll('button').forEach((b) => b.onclick = () => { SET.staff.splice(+b.dataset.i, 1); saveSet(); drawSettings(); fillRouteForm(); });
+}
+document.getElementById('clientAdd').onclick = () => { const v = document.getElementById('clientIn').value; if (addClient(v)) { document.getElementById('clientIn').value = ''; drawSettings(); } };
+document.getElementById('startAdd').onclick = async () => {
+  const label = TV.norm(document.getElementById('startLabel').value), address = TV.norm(document.getElementById('startAddr').value);
+  if (!label || !address) return alert('名前と住所を入れてください。');
+  const g = await geocodeCached(address).catch(() => null);
+  if (!g) return alert('住所が地図で見つかりません。');
+  SET.starts.push({ label, address, lat: g.lat, lng: g.lng }); saveSet();
+  document.getElementById('startLabel').value = ''; document.getElementById('startAddr').value = '';
+  drawSettings(); fillRouteForm();
+};
+document.getElementById('pickFolder2').onclick = pickFolder;
+
+// =============== 起動 ===============
+fillRouteForm(); drawRoute(); drawPending(); updatePendingBtn();
+initFolder().then(() => { if (ROOT) afterFolderReady(); });
+</script>
+</body>
+</html>

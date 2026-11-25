@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1f4e79">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="訪問日報">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon.svg">
+<title>訪問日報（携帯）</title>
+<style>
+  :root { --main:#1f4e79; --accent:#2e75b6; --ok:#2e7d32; --warn:#c62828; --bg:#f3f5f8; --line:#d6dce4; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: -apple-system, "Hiragino Sans", "Noto Sans JP", "Yu Gothic", sans-serif; background:var(--bg); color:#222; font-size:16px; }
+  header { position:sticky; top:0; z-index:5; background:var(--main); color:#fff; padding:10px 14px; padding-top:calc(10px + env(safe-area-inset-top)); display:flex; align-items:center; gap:8px; }
+  header h1 { font-size:17px; margin:0; flex:1; }
+  header button { background:transparent; border:1px solid rgba(255,255,255,.6); color:#fff; border-radius:6px; padding:6px 10px; font-size:14px; }
+  main { padding:12px; padding-bottom:110px; max-width:720px; margin:0 auto; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:10px; padding:12px; margin-bottom:10px; }
+  .muted { color:#666; font-size:13px; }
+  .btn { display:block; width:100%; border:none; border-radius:10px; padding:14px; font-size:17px; font-weight:bold; background:var(--accent); color:#fff; margin:8px 0; text-align:center; text-decoration:none; }
+  .btn.sub { background:#fff; color:var(--accent); border:2px solid var(--accent); }
+  .btn.ok { background:var(--ok); }
+  .btn.warn { background:#fff; color:var(--warn); border:2px solid var(--warn); }
+  .btn.small { display:inline-block; width:auto; padding:8px 12px; font-size:14px; margin:4px 4px 0 0; }
+  .row { display:flex; gap:8px; }
+  .row > * { flex:1; }
+  .stop { display:flex; gap:10px; align-items:flex-start; }
+  .num { flex:0 0 34px; height:34px; border-radius:17px; background:var(--accent); color:#fff; display:flex; align-items:center; justify-content:center; font-weight:bold; }
+  .stop.done .num { background:var(--ok); }
+  .stop.added .num { background:#8e6c00; }
+  .stop .body { flex:1; min-width:0; }
+  .name { font-weight:bold; font-size:17px; }
+  .tag { display:inline-block; font-size:12px; padding:2px 6px; border-radius:4px; background:#e8eef6; color:var(--main); margin-right:4px; }
+  .tag.ok { background:#e3f2e5; color:var(--ok); }
+  label.f { display:block; font-weight:bold; margin:14px 0 6px; font-size:15px; }
+  input[type=text], input[type=number], input[type=date], input[type=datetime-local], input[type=tel], textarea, select { width:100%; padding:12px; font-size:16px; border:1px solid var(--line); border-radius:8px; background:#fff; }
+  textarea { min-height:110px; }
+  .choices { display:flex; flex-wrap:wrap; gap:8px; }
+  .choices button { border:2px solid var(--line); background:#fff; border-radius:22px; padding:10px 14px; font-size:15px; }
+  .choices button.on { border-color:var(--accent); background:var(--accent); color:#fff; }
+  .photos { display:flex; gap:8px; flex-wrap:wrap; }
+  .photos .ph { position:relative; width:96px; height:96px; }
+  .photos img { width:96px; height:96px; object-fit:cover; border-radius:8px; border:1px solid var(--line); }
+  .photos .del { position:absolute; top:-6px; right:-6px; width:26px; height:26px; border-radius:13px; border:none; background:var(--warn); color:#fff; font-weight:bold; }
+  .bar { position:fixed; left:0; right:0; bottom:0; background:#fff; border-top:1px solid var(--line); padding:8px 12px; padding-bottom:calc(8px + env(safe-area-inset-bottom)); display:flex; gap:8px; z-index:5; }
+  .bar .btn { margin:0; }
+  .toast { position:fixed; left:50%; bottom:100px; transform:translateX(-50%); background:#333; color:#fff; padding:10px 16px; border-radius:20px; font-size:14px; z-index:20; opacity:0; transition:opacity .3s; pointer-events:none; }
+  .toast.show { opacity:1; }
+  .rep { border-top:1px dashed var(--line); padding-top:8px; margin-top:8px; font-size:14px; }
+  .warnbox { background:#fff4e5; border:1px solid #f0b46c; border-radius:8px; padding:10px; font-size:14px; }
+  a.tel { color:var(--accent); }
+</style>
+</head>
+<body>
+<header><h1 id="title">訪問日報</h1><span id="hbtn"></span></header>
+<main id="app"></main>
+<div class="toast" id="toast"></div>
+<input type="file" id="routeFile" accept=".json,application/json" hidden>
+<input type="file" id="photoFile" accept="image/*" capture="environment" hidden>
+<input type="file" id="photoPick" accept="image/*" multiple hidden>
+<script src="common.js"></script>
+<script>
+// ---------- 保存（IndexedDB） ----------
+const DB = {
+  db: null,
+  open() {
+    return new Promise((ok, ng) => {
+      const r = indexedDB.open('tainou-mobile', 1);
+      r.onupgradeneeded = () => r.result.createObjectStore('kv');
+      r.onsuccess = () => { DB.db = r.result; ok(); };
+      r.onerror = () => ng(r.error);
+    });
+  },
+  get(k) { return new Promise((ok, ng) => { const q = DB.db.transaction('kv').objectStore('kv').get(k); q.onsuccess = () => ok(q.result); q.onerror = () => ng(q.error); }); },
+  set(k, v) { return new Promise((ok, ng) => { const t = DB.db.transaction('kv', 'readwrite'); t.objectStore('kv').put(v, k); t.oncomplete = () => ok(); t.onerror = () => ng(t.error); }); },
+};
+
+let S = { staff: '', current: null, archive: [] };
+const emptyCurrent = () => ({ route: null, reports: [], extras: [], lastExportAt: null, dirty: false });
+
+async function save() {
+  await DB.set('staff', S.staff);
+  await DB.set('current', S.current);
+  await DB.set('archive', S.archive);
+}
+
+function toast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove('show'), 2200);
+}
+
+// 7日経過した書き出し済みデータを削除
+function purgeOld() {
+  const limit = Date.now() - TV.KEEP_DAYS * 864e5;
+  S.archive = S.archive.filter((a) => new Date(a.at).getTime() > limit);
+  const c = S.current;
+  if (c && c.lastExportAt && !c.dirty && new Date(c.lastExportAt).getTime() <= limit) S.current = emptyCurrent();
+}
+
+// ---------- 画面 ----------
+const app = document.getElementById('app');
+function setHeader(title, btnHtml) {
+  document.getElementById('title').textContent = title;
+  document.getElementById('hbtn').innerHTML = btnHtml || '';
+}
+
+function allStops() {
+  const c = S.current;
+  const stops = c.route ? c.route.stops.slice() : [];
+  return stops.concat(c.extras);
+}
+function reportsOf(tid) { return S.current.reports.filter((r) => r.targetId === tid); }
+
+function viewSetup() {
+  setHeader('はじめに');
+  app.innerHTML = `
+    <div class="card">
+      <p>日報に載せる<b>担当者名</b>を入れてください（あとで変更できます）。</p>
+      <input type="text" id="staffIn" placeholder="例：山田" value="${TV.esc(S.staff)}">
+      <button class="btn" id="okStaff">決定</button>
+    </div>`;
+  document.getElementById('okStaff').onclick = async () => {
+    const v = TV.norm(document.getElementById('staffIn').value);
+    if (!v) return toast('担当者名を入れてください');
+    S.staff = v; await save(); viewHome();
+  };
+}
+
+function viewHome() {
+  const c = S.current;
+  setHeader('訪問日報', '<button id="setBtn">設定</button>');
+  document.getElementById('setBtn').onclick = viewSettings;
+  const stops = allStops();
+  let html = '';
+  if (!c.route && !c.extras.length) {
+    html += `<div class="card"><p><b>ルートが読み込まれていません。</b></p>
+      <p class="muted">PCから届いたメールのルートファイル（ルート_….json）を「ファイル」に保存してから、下のボタンで選んでください。</p>
+      <button class="btn" id="loadRoute">ルートを読み込む</button></div>`;
+  } else {
+    const r = c.route;
+    const done = stops.filter((s) => reportsOf(s.targetId).length).length;
+    html += `<div class="card">
+      <div><b>${r ? TV.esc(r.date.replace(/-/g, '/')) + ' のルート' : 'ルートなし（追加分のみ）'}</b>
+      ${r ? '<span class="tag">' + TV.esc(TV.MODES[r.mode] || r.mode) + '</span>' : ''}</div>
+      <div class="muted">担当：${TV.esc(S.staff)}　／　訪問済 ${done} / ${stops.length} 件</div>
+      ${c.lastExportAt ? '<div class="muted">最終書き出し：' + TV.dateTimeText(c.lastExportAt) + (c.dirty ? '（その後に変更あり）' : '') + '</div>' : ''}
+    </div>`;
+    stops.forEach((s, i) => {
+      const reps = reportsOf(s.targetId);
+      const cls = reps.length ? 'done' : '';
+      html += `<div class="card stop ${cls} ${s.added ? 'added' : ''}" data-tid="${TV.esc(s.targetId)}">
+        <div class="num">${s.added ? '+' : i + 1}</div>
+        <div class="body">
+          <div class="name">${TV.esc(s.name)}</div>
+          <div>${TV.esc(s.building)} ${TV.esc(s.room)}</div>
+          <div class="muted">${TV.esc(s.address)}</div>
+          <div><span class="tag">${TV.esc(s.client)}</span>${reps.map((r) => '<span class="tag ok">' + TV.hm(r.visitedAt) + ' ' + TV.esc(r.result) + '</span>').join('')}</div>
+        </div></div>`;
+    });
+    html += `<button class="btn sub" id="addExtra">＋ ルートにない訪問先を追加</button>
+      <button class="btn sub" id="loadRoute">別のルートを読み込む</button>`;
+  }
+  app.innerHTML = html;
+  const lr = document.getElementById('loadRoute');
+  if (lr) lr.onclick = () => document.getElementById('routeFile').click();
+  const ae = document.getElementById('addExtra');
+  if (ae) ae.onclick = () => viewExtraForm();
+  app.querySelectorAll('.stop').forEach((el) => el.onclick = () => viewStop(el.dataset.tid));
+  if (c.route || c.extras.length) {
+    const bar = document.createElement('div');
+    bar.className = 'bar';
+    bar.innerHTML = '<button class="btn ok" id="exportBtn">今日の分を書き出す</button>';
+    app.appendChild(bar);
+    document.getElementById('exportBtn').onclick = exportReports;
+  }
+}
+
+function findStop(tid) { return allStops().find((s) => s.targetId === tid); }
+
+function viewStop(tid) {
+  const s = findStop(tid);
+  const mode = S.current.route ? S.current.route.mode : 'driving';
+  setHeader(s.name, '<button id="backBtn">戻る</button>');
+  document.getElementById('backBtn').onclick = viewHome;
+  const reps = reportsOf(tid);
+  app.innerHTML = `
+    <div class="card">
+      <div class="name">${TV.esc(s.name)} <span class="muted">${TV.esc(s.kana || '')}</span></div>
+      <div>${TV.esc(s.building)} ${TV.esc(s.room)}</div>
+      <div class="muted">${TV.esc(s.address)}</div>
+      <div style="margin-top:6px"><span class="tag">${TV.esc(s.client)}</span>${s.caseNo ? '<span class="tag">案件 ' + TV.esc(s.caseNo) + '</span>' : ''}</div>
+      ${s.arrears !== '' && s.arrears != null ? '<div style="margin-top:6px">滞納額：<b>' + TV.yen(s.arrears) + '</b></div>' : ''}
+      ${s.phone ? '<div>電話：<a class="tel" href="tel:' + TV.esc(s.phone) + '">' + TV.esc(s.phone) + '</a></div>' : ''}
+      ${s.note ? '<div class="warnbox" style="margin-top:8px">' + TV.esc(s.note) + '</div>' : ''}
+    </div>
+    <a class="btn sub" href="${TV.navUrl(s, mode)}" target="_blank" rel="noopener">ここへナビ（Googleマップ）</a>
+    <button class="btn" id="arrive">${reps.length ? '再訪問（もう1件日報を書く）' : '到着した（日報を書く）'}</button>
+    ${reps.length ? '<div class="card"><b>この訪問先の日報</b>' + reps.map((r) => `
+      <div class="rep">${TV.dateTimeText(r.visitedAt)}　<b>${TV.esc(r.result)}</b>${r.contact ? '（' + TV.esc(r.contact) + '）' : ''}
+      <div class="muted">${TV.esc((r.memo || '').slice(0, 60))}</div>
+      <button class="btn small sub" data-rid="${r.reportId}">直す</button></div>`).join('') + '</div>' : ''}
+    ${s.added ? '<button class="btn warn" id="delExtra">この追加訪問先を削除</button>' : ''}`;
+  document.getElementById('arrive').onclick = () => viewForm(tid, null);
+  app.querySelectorAll('[data-rid]').forEach((b) => b.onclick = () => viewForm(tid, b.dataset.rid));
+  const de = document.getElementById('delExtra');
+  if (de) de.onclick = async () => {
+    if (!confirm('この追加訪問先と、その日報を削除しますか？')) return;
+    S.current.extras = S.current.extras.filter((x) => x.targetId !== tid);
+    S.current.reports = S.current.reports.filter((x) => x.targetId !== tid);
+    S.current.dirty = true; await save(); viewHome();
+  };
+}
+
+function toLocalInput(d) {
+  d = new Date(d);
+  return TV.ymd(d, '-') + 'T' + TV.hm(d);
+}
+
+function choiceHtml(name, list, value, multi) {
+  return '<div class="choices" data-name="' + name + '" data-multi="' + (multi ? 1 : 0) + '">' +
+    list.map((v) => {
+      const on = multi ? (value || []).includes(v) : value === v;
+      return '<button type="button" class="' + (on ? 'on' : '') + '" data-v="' + TV.esc(v) + '">' + TV.esc(v) + '</button>';
+    }).join('') + '</div>';
+}
+
+function viewForm(tid, rid) {
+  const s = findStop(tid);
+  const old = rid ? S.current.reports.find((r) => r.reportId === rid) : null;
+  const r = old ? JSON.parse(JSON.stringify(old)) : {
+    reportId: TV.uuid(), targetId: tid, visitedAt: new Date().toISOString(), staff: S.staff,
+    result: '', contact: '', signs: [], promiseDate: '', promiseAmount: '', nextAction: '', memo: '', photos: [],
+  };
+  setHeader(old ? '日報を直す' : '日報を書く', '<button id="backBtn">戻る</button>');
+  document.getElementById('backBtn').onclick = () => { if (confirm('入力内容を保存せずに戻りますか？')) viewStop(tid); };
+  app.innerHTML = `
+    <div class="card"><b>${TV.esc(s.name)}</b>　${TV.esc(s.building)} ${TV.esc(s.room)}</div>
+    <label class="f">訪問日時</label>
+    <input type="datetime-local" id="visitedAt" value="${toLocalInput(r.visitedAt)}">
+    <label class="f">訪問結果 <span style="color:var(--warn)">必須</span></label>
+    ${choiceHtml('result', TV.RESULTS, r.result)}
+    <div id="contactBox" style="display:${r.result === '面談' ? 'block' : 'none'}">
+      <label class="f">面談相手</label>
+      ${choiceHtml('contact', TV.CONTACTS, r.contact)}
+    </div>
+    <label class="f">現地の様子（あてはまるもの全部）</label>
+    ${choiceHtml('signs', TV.SIGNS, r.signs, true)}
+    <label class="f">支払約束（あれば）</label>
+    <div class="row"><input type="date" id="promiseDate" value="${TV.esc(r.promiseDate)}"><input type="number" inputmode="numeric" id="promiseAmount" placeholder="金額（円）" value="${TV.esc(r.promiseAmount)}"></div>
+    <label class="f">次回アクション</label>
+    ${choiceHtml('nextAction', TV.NEXT_ACTIONS, r.nextAction)}
+    <label class="f">メモ</label>
+    <textarea id="memo" placeholder="気づいたこと、話した内容など">${TV.esc(r.memo)}</textarea>
+    <label class="f">写真（${TV.MAX_PHOTOS}枚まで）</label>
+    <div class="photos" id="photos"></div>
+    <div class="row"><button type="button" class="btn sub" id="shoot">撮影する</button><button type="button" class="btn sub" id="pick">写真から選ぶ</button></div>
+    <div class="bar"><button class="btn ok" id="saveRep">保存する</button></div>`;
+
+  app.querySelectorAll('.choices').forEach((box) => {
+    box.onclick = (e) => {
+      const b = e.target.closest('button'); if (!b) return;
+      const name = box.dataset.name, v = b.dataset.v;
+      if (box.dataset.multi === '1') {
+        const set = new Set(r[name]); set.has(v) ? set.delete(v) : set.add(v); r[name] = [...set];
+      } else {
+        r[name] = r[name] === v ? '' : v;
+      }
+      box.querySelectorAll('button').forEach((x) => x.classList.toggle('on', box.dataset.multi === '1' ? r[name].includes(x.dataset.v) : r[name] === x.dataset.v));
+      if (name === 'result') {
+        document.getElementById('contactBox').style.display = r.result === '面談' ? 'block' : 'none';
+        if (r.result !== '面談') { r.contact = ''; document.querySelectorAll('[data-name=contact] button').forEach((x) => x.classList.remove('on')); }
+      }
+    };
+  });
+
+  const drawPhotos = () => {
+    const box = document.getElementById('photos');
+    box.innerHTML = r.photos.map((p, i) => '<div class="ph"><img src="' + p + '"><button type="button" class="del" data-i="' + i + '">×</button></div>').join('') || '<span class="muted">なし</span>';
+    box.querySelectorAll('.del').forEach((b) => b.onclick = () => { r.photos.splice(+b.dataset.i, 1); drawPhotos(); });
+  };
+  drawPhotos();
+  const addPhotos = async (files) => {
+    for (const f of files) {
+      if (r.photos.length >= TV.MAX_PHOTOS) { toast('写真は' + TV.MAX_PHOTOS + '枚までです'); break; }
+      try { r.photos.push(await shrinkPhoto(f)); } catch (e) { toast('写真を読み込めませんでした'); }
+    }
+    drawPhotos();
+  };
+  const pf = document.getElementById('photoFile'), pp = document.getElementById('photoPick');
+  document.getElementById('shoot').onclick = () => { pf.value = ''; pf.onchange = () => addPhotos(pf.files); pf.click(); };
+  document.getElementById('pick').onclick = () => { pp.value = ''; pp.onchange = () => addPhotos(pp.files); pp.click(); };
+
+  document.getElementById('saveRep').onclick = async () => {
+    if (!r.result) return toast('訪問結果を選んでください');
+    const va = document.getElementById('visitedAt').value;
+    r.visitedAt = va ? new Date(va).toISOString() : r.visitedAt;
+    r.promiseDate = document.getElementById('promiseDate').value;
+    r.promiseAmount = document.getElementById('promiseAmount').value;
+    r.memo = document.getElementById('memo').value;
+    r.staff = S.staff;
+    r.savedAt = new Date().toISOString();
+    const i = S.current.reports.findIndex((x) => x.reportId === r.reportId);
+    if (i >= 0) S.current.reports[i] = r; else S.current.reports.push(r);
+    S.current.dirty = true;
+    try { await save(); } catch (e) { return alert('保存できませんでした：' + e.message); }
+    toast('保存しました');
+    viewHome();
+  };
+}
+
+// 写真を長辺1280pxに縮小し、だいたい250KB以下のJPEGにする
+async function shrinkPhoto(file) {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((ok, ng) => { const i = new Image(); i.onload = () => ok(i); i.onerror = ng; i.src = url; });
+    let w = img.naturalWidth, h = img.naturalHeight;
+    const max = 1280, sc = Math.min(1, max / Math.max(w, h));
+    w = Math.round(w * sc); h = Math.round(h * sc);
+    const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+    cv.getContext('2d').drawImage(img, 0, 0, w, h);
+    let q = 0.75, data = cv.toDataURL('image/jpeg', q);
+    while (data.length * 0.75 > 250 * 1024 && q > 0.4) { q -= 0.1; data = cv.toDataURL('image/jpeg', q); }
+    return data;
+  } finally { URL.revokeObjectURL(url); }
+}
+
+function viewExtraForm() {
+  setHeader('訪問先を追加', '<button id="backBtn">戻る</button>');
+  document.getElementById('backBtn').onclick = viewHome;
+  const clients = [...new Set(TV.DEFAULT_CLIENTS.concat(allStops().map((s) => s.client)))];
+  app.innerHTML = `
+    <div class="card muted">ルートにない訪問先を追加します。追加した訪問先も日報と一緒に書き出されます。</div>
+    <label class="f">依頼元 <span style="color:var(--warn)">必須</span></label>
+    <input type="text" id="x_client" list="clientList"><datalist id="clientList">${clients.map((c) => '<option value="' + TV.esc(c) + '">').join('')}</datalist>
+    <label class="f">案件番号</label><input type="text" id="x_caseNo">
+    <label class="f">対象者名 <span style="color:var(--warn)">必須</span></label><input type="text" id="x_name">
+    <label class="f">フリガナ</label><input type="text" id="x_kana">
+    <label class="f">物件名 <span style="color:var(--warn)">必須</span></label><input type="text" id="x_building">
+    <label class="f">号室 <span style="color:var(--warn)">必須</span></label><input type="text" id="x_room">
+    <label class="f">住所 <span style="color:var(--warn)">必須</span></label><input type="text" id="x_address">
+    <label class="f">電話番号</label><input type="tel" id="x_phone">
+    <div class="bar"><button class="btn ok" id="okExtra">追加して日報を書く</button></div>`;
+  document.getElementById('okExtra').onclick = async () => {
+    const g = (k) => TV.norm(document.getElementById('x_' + k).value);
+    const t = { client: g('client'), caseNo: g('caseNo'), name: g('name'), kana: g('kana'), building: g('building'), room: g('room'), address: g('address'), phone: g('phone'), arrears: '', note: '', lat: null, lng: null, added: true };
+    if (!t.client || !t.name || !t.building || !t.room || !t.address) return toast('必須の項目を入れてください');
+    t.targetId = TV.targetId(t);
+    const exist = findStop(t.targetId);
+    if (exist) { toast('すでにある訪問先です'); return viewStop(exist.targetId); }
+    S.current.extras.push(t); S.current.dirty = true; await save();
+    viewForm(t.targetId, null);
+  };
+}
+
+// ---------- ルート読み込み ----------
+document.getElementById('routeFile').onchange = async (e) => {
+  const f = e.target.files[0]; e.target.value = '';
+  if (!f) return;
+  let data;
+  try { data = JSON.parse(await f.text()); } catch (err) { return alert('ルートファイルを読めませんでした。'); }
+  if (data.type !== TV.ROUTE_TYPE) return alert('これはルートファイルではありません。');
+  const c = S.current;
+  if (c.route && c.route.routeId === data.routeId) { toast('同じルートは読み込み済みです'); return; }
+  if ((c.reports.length || c.extras.length) && (c.dirty || !c.lastExportAt)) {
+    if (!confirm('まだ書き出していない日報があります。\n先に「今日の分を書き出す」をおすすめします。\n\nこのまま新しいルートに切り替えると、書き出していない日報は消えます。切り替えますか？')) return;
+  }
+  S.current = emptyCurrent();
+  S.current.route = data;
+  await save();
+  toast(data.stops.length + '件のルートを読み込みました');
+  viewHome();
+};
+
+// ---------- 書き出し ----------
+function buildPayload() {
+  const c = S.current;
+  const stops = allStops();
+  const byId = Object.fromEntries(stops.map((s) => [s.targetId, s]));
+  const strip = (s) => { const o = Object.assign({}, s); delete o.order; return o; };
+  return {
+    type: TV.REPORT_TYPE, version: 1, appVersion: TV.APP_VERSION,
+    exportedAt: new Date().toISOString(), staff: S.staff,
+    routeId: c.route ? c.route.routeId : null,
+    routeDate: c.route ? c.route.date : TV.ymd(null, '-'),
+    mode: c.route ? c.route.mode : '',
+    reports: c.reports.map((r) => Object.assign({}, r, { target: strip(byId[r.targetId] || {}) })),
+    unvisited: stops.filter((s) => !c.reports.some((r) => r.targetId === s.targetId)).map(strip),
+  };
+}
+
+async function exportReports() {
+  const c = S.current;
+  if (!c.reports.length && !confirm('日報が1件もありません。未訪問だけの記録として書き出しますか？')) return;
+  const p = buildPayload();
+  const name = '日報_' + p.routeDate.replace(/-/g, '') + '_' + TV.safeFileName(S.staff) + '.json';
+  const blob = new Blob([JSON.stringify(p)], { type: 'application/json' });
+  const file = new File([blob], name, { type: 'application/json' });
+  let sent = false;
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file], title: name, text: '訪問日報データ ' + p.routeDate });
+      sent = true;
+    } catch (e) {
+      if (e.name === 'AbortError') return toast('書き出しを中止しました');
+    }
+  }
+  if (!sent) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+    alert('「' + name + '」を保存しました。\nメールに添付してPCへ送ってください。');
+  }
+  c.lastExportAt = p.exportedAt; c.dirty = false;
+  S.archive = S.archive.filter((a) => a.name !== name);
+  S.archive.push({ at: p.exportedAt, name, payload: p });
+  await save();
+  viewHome();
+}
+
+async function resend(name) {
+  const a = S.archive.find((x) => x.name === name); if (!a) return;
+  const blob = new Blob([JSON.stringify(a.payload)], { type: 'application/json' });
+  const file = new File([blob], name, { type: 'application/json' });
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try { await navigator.share({ files: [file], title: name }); return; } catch (e) { if (e.name === 'AbortError') return; }
+  }
+  const l = document.createElement('a'); l.href = URL.createObjectURL(blob); l.download = name; l.click();
+}
+
+function viewSettings() {
+  setHeader('設定', '<button id="backBtn">戻る</button>');
+  document.getElementById('backBtn').onclick = viewHome;
+  const limit = (a) => { const d = new Date(new Date(a.at).getTime() + TV.KEEP_DAYS * 864e5); return TV.ymd(d, '/'); };
+  app.innerHTML = `
+    <div class="card"><label class="f" style="margin-top:0">担当者名</label>
+      <input type="text" id="staffIn" value="${TV.esc(S.staff)}">
+      <button class="btn small" id="okStaff">変更</button></div>
+    <div class="card"><b>書き出し済みの日報（再送用）</b>
+      <div class="muted">書き出しから${TV.KEEP_DAYS}日たつと自動で消えます。</div>
+      ${S.archive.length ? S.archive.map((a) => `<div class="rep">${TV.esc(a.name)}<div class="muted">書き出し ${TV.dateTimeText(a.at)}／${limit(a)} に削除</div>
+        <button class="btn small sub" data-name="${TV.esc(a.name)}">もう一度送る</button></div>`).join('') : '<div class="muted" style="margin-top:6px">なし</div>'}
+    </div>
+    <div class="card"><b>データの削除</b>
+      <div class="muted">PCへの取り込みが終わったら、携帯に残っている滞納者の情報を消してください。</div>
+      <button class="btn warn" id="wipe">この携帯の訪問データをすべて削除</button></div>
+    <div class="muted">アプリ版 ${TV.APP_VERSION}</div>`;
+  document.getElementById('okStaff').onclick = async () => {
+    const v = TV.norm(document.getElementById('staffIn').value);
+    if (!v) return toast('担当者名を入れてください');
+    S.staff = v; await save(); toast('変更しました');
+  };
+  app.querySelectorAll('[data-name]').forEach((b) => b.onclick = () => resend(b.dataset.name));
+  document.getElementById('wipe').onclick = async () => {
+    const c = S.current;
+    const msg = (c.dirty || (!c.lastExportAt && c.reports.length)) ? '書き出していない日報があります。削除すると元に戻せません。\n本当に削除しますか？' : 'ルート・日報・再送用データをすべて削除します。元に戻せません。\n削除しますか？';
+    if (!confirm(msg)) return;
+    S.current = emptyCurrent(); S.archive = []; await save(); toast('削除しました'); viewHome();
+  };
+}
+
+// ---------- 起動 ----------
+(async function () {
+  await DB.open();
+  S.staff = (await DB.get('staff')) || '';
+  S.current = (await DB.get('current')) || emptyCurrent();
+  S.archive = (await DB.get('archive')) || [];
+  purgeOld(); await save();
+  if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+  S.staff ? viewHome() : viewSetup();
+})();
+</script>
+</body>
+</html>
