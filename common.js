@@ -127,6 +127,22 @@ TV.orderStops = function (start, stops) {
   return path.slice(1).concat(noPos);
 };
 
+// 写真を長辺1280pxに縮小し、だいたい250KB以下のJPEG（data URL）にする
+TV.shrinkPhoto = async function (file) {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((ok, ng) => { const i = new Image(); i.onload = () => ok(i); i.onerror = ng; i.src = url; });
+    let w = img.naturalWidth, h = img.naturalHeight;
+    const sc = Math.min(1, 1280 / Math.max(w, h));
+    w = Math.round(w * sc); h = Math.round(h * sc);
+    const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+    cv.getContext('2d').drawImage(img, 0, 0, w, h);
+    let q = 0.75, data = cv.toDataURL('image/jpeg', q);
+    while (data.length * 0.75 > 250 * 1024 && q > 0.4) { q -= 0.1; data = cv.toDataURL('image/jpeg', q); }
+    return data;
+  } finally { URL.revokeObjectURL(url); }
+};
+
 TV.routeLengthKm = function (start, stops) {
   let s = 0, cur = start;
   stops.forEach((p) => { if (p.lat != null && cur.lat != null) { s += TV.dist(cur, p); cur = p; } });

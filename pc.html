@@ -141,7 +141,8 @@
   <div class="panel">
     <h2>携帯から届いた日報データを取り込む</h2>
     <p class="muted">メールに添付された「日報_YYYYMMDD_担当者.json」を保存して、ここにドロップしてください（複数まとめて可）。<br>
-    取り込むと、データを「日報データ」に保存し、1訪問ごとのPDFを「日報PDF」、1日のまとめPDFを「まとめPDF」に作ります。同じファイルを2回取り込んでも重複しません。</p>
+    取り込むと「日報データ」に保存され、すぐ「③ 履歴検索」で見られます。内容の修正・基幹システム用のコピー・PDFの出力は「③ 履歴検索」で行います。<br>
+    同じファイルを2回取り込んでも重複しません。PCで修正した日報は、携帯から同じ日報が届いても上書きしません。</p>
     <div class="drop" id="repDrop">ここに日報データ（.json）をドロップ、またはクリックして選ぶ</div>
     <input type="file" id="repFile" accept=".json,application/json" multiple hidden>
   </div>
@@ -162,13 +163,15 @@
       <label>担当者<select id="qStaff"></select></label>
       <label>期間（から）<input type="date" id="qFrom"></label>
       <label>（まで）<input type="date" id="qTo"></label>
+      <label>基幹への転記<select id="qTrans"><option value="">すべて</option><option value="no">未転記だけ</option><option value="yes">転記済みだけ</option></select></label>
       <button class="btn sub" id="qClear">条件をクリア</button>
+      <button class="btn sub" id="listPdfBtn">表示中の一覧をPDFにする</button>
       <button class="btn sub" id="rebuildBtn" title="フォルダの日報データを読み直します">索引を作り直す</button>
     </div>
     <div class="muted" id="qCount" style="margin-top:6px"></div>
   </div>
   <div class="grid2">
-    <div class="panel"><div class="tblWrap" style="max-height:calc(100vh - 230px)"><table id="resTbl"><thead><tr><th>訪問日時</th><th>依頼元</th><th>対象者</th><th>物件・号室</th><th>結果</th><th>次回</th><th>担当</th></tr></thead><tbody></tbody></table></div></div>
+    <div class="panel"><div class="tblWrap" style="max-height:calc(100vh - 230px)"><table id="resTbl"><thead><tr><th>訪問日時</th><th>依頼元</th><th>対象者</th><th>物件・号室</th><th>結果</th><th>次回</th><th>担当</th><th>転記</th></tr></thead><tbody></tbody></table></div></div>
     <div class="panel" id="detailBox"><span class="muted">左の一覧から日報を選ぶと、ここに詳しい内容が出ます。</span></div>
   </div>
 </section>
@@ -290,9 +293,9 @@ async function uniqueName(dir, base, ext) {
 }
 
 // _管理.json（未訪問一覧）と _索引.json（検索用）
-let MANAGE = { pending: [] };
+let MANAGE = { pending: [], transferred: {} };
 let INDEX = { reports: [] };
-async function loadManage() { MANAGE = await readJson(ROOT, '_管理.json', { pending: [] }); }
+async function loadManage() { MANAGE = Object.assign({ pending: [], transferred: {} }, await readJson(ROOT, '_管理.json', {})); }
 async function saveManage() { await writeFile(ROOT, '_管理.json', JSON.stringify(MANAGE, null, 1)); }
 async function loadIndex() { INDEX = await readJson(ROOT, '_索引.json', { reports: [] }); }
 async function saveIndex() { await writeFile(ROOT, '_索引.json', JSON.stringify(INDEX)); }
@@ -617,53 +620,44 @@ async function importOne(file) {
   try { p = JSON.parse(await file.text()); } catch (e) { throw new Error('ファイルを読めません'); }
   if (p.type !== TV.REPORT_TYPE) throw new Error('日報データではありません');
   const month = (p.routeDate || TV.ymd(p.exportedAt, '-')).slice(0, 7);
-  const known = new Set(INDEX.reports.map((r) => r.reportId));
-  const fresh = p.reports.filter((r) => !known.has(r.reportId));
-  const changed = p.reports.filter((r) => { const k = INDEX.reports.find((x) => x.reportId === r.reportId); return k && k.savedAt !== r.savedAt; });
   log('■ ' + file.name + '（日報' + p.reports.length + '件／未訪問' + p.unvisited.length + '件）');
-  if (!fresh.length && !changed.length) log('  新しい日報はありません（取り込み済み）。');
+  p.reports.forEach((r) => r.target && addClient(r.target.client));
 
-  // 1) データ保存
+  // 1) 保存先のファイル名（前回と別の日報が入っていれば別名にする）
   const dataDir = await dirPath(['日報データ', month], true);
   let dataName = file.name.replace(/[\\/:*?"<>|]/g, '_');
   if (!/\.json$/i.test(dataName)) dataName += '.json';
-  const old = await readJson(dataDir, dataName, null);
+  let old = await readJson(dataDir, dataName, null);
   if (old) {
     const oldIds = (old.reports || []).map((r) => r.reportId);
     const newIds = new Set(p.reports.map((r) => r.reportId));
-    if (!oldIds.every((id) => newIds.has(id))) dataName = await uniqueName(dataDir, dataName.replace(/\.json$/i, ''), '.json');
+    if (!oldIds.every((id) => newIds.has(id))) { dataName = await uniqueName(dataDir, dataName.replace(/\.json$/i, ''), '.json'); old = null; }
   }
-  await writeFile(dataDir, dataName, JSON.stringify(p));
   const dataPath = '日報データ/' + month + '/' + dataName;
+  const oldMap = old ? Object.fromEntries(old.reports.map((r) => [r.reportId, r])) : {};
 
-  // 2) 1訪問ごとのPDF（新規・修正分）
-  p.reports.forEach((r) => r.target && addClient(r.target.client));
-  for (const r of fresh.concat(changed)) {
-    const d = new Date(r.visitedAt);
-    const pdfMonth = TV.ymd(d, '-').slice(0, 7);
-    const pdfDir = await dirPath(['日報PDF', pdfMonth], true);
+  // 2) PCで修正した日報は携帯の内容で上書きしない
+  let added = 0, updated = 0, kept = 0;
+  const merged = p.reports.map((r) => {
+    const idx = INDEX.reports.find((x) => x.reportId === r.reportId);
     const t = r.target || {};
-    const base = [TV.ymd(d), t.client, t.name, (t.building || '') + (t.room || ''), r.result].map(TV.safeFileName).join('_');
-    const prev = INDEX.reports.find((x) => x.reportId === r.reportId);
-    let pdfName;
-    if (prev && prev.pdf && prev.pdf.startsWith('日報PDF/' + pdfMonth + '/')) pdfName = prev.pdf.split('/').pop();
-    else pdfName = await uniqueName(pdfDir, base, '.pdf');
-    const blob = await renderPdf(visitHtml(r, t, p));
-    await writeFile(pdfDir, pdfName, blob);
-    const entry = indexEntry(r, t, p, dataPath, '日報PDF/' + pdfMonth + '/' + pdfName);
-    if (prev) Object.assign(prev, entry); else INDEX.reports.push(entry);
-    log('  ' + (prev ? '修正' : '追加') + '：' + TV.dateTimeText(r.visitedAt) + ' ' + (t.name || '') + ' ' + r.result + ' → ' + pdfName);
-  }
-  // 既存分もデータの場所を更新
-  p.reports.forEach((r) => { const e = INDEX.reports.find((x) => x.reportId === r.reportId); if (e) e.file = dataPath; });
+    if (idx && idx.pcEdited) {
+      if (r.savedAt !== idx.phoneSavedAt) { kept++; log('  PCで修正済みのため携帯の変更は取り込みませんでした：' + (t.name || '') + ' ' + TV.dateTimeText(r.visitedAt)); }
+      const o = oldMap[r.reportId];
+      if (o && o.pcEdited) { idx.file = dataPath; return o; }
+      return r;
+    }
+    if (!idx) { INDEX.reports.push(indexEntry(r, t, p, dataPath, '')); added++; log('  追加：' + TV.dateTimeText(r.visitedAt) + ' ' + (t.name || '') + ' ' + r.result); }
+    else {
+      if (idx.savedAt !== r.savedAt) { updated++; log('  携帯で直した内容を反映：' + TV.dateTimeText(r.visitedAt) + ' ' + (t.name || '') + ' ' + r.result); }
+      Object.assign(idx, indexEntry(r, t, p, dataPath, idx.pdf || ''));
+    }
+    return r;
+  });
+  await writeFile(dataDir, dataName, JSON.stringify(Object.assign({}, p, { reports: merged })));
+  if (!added && !updated && !kept) log('  新しい日報はありません（取り込み済み）。');
 
-  // 3) 1日のまとめPDF
-  const sumDir = await dirPath(['まとめPDF', month], true);
-  const sumName = 'まとめ_' + (p.routeDate || '').replace(/-/g, '') + '_' + TV.safeFileName(p.staff) + '.pdf';
-  await writeFile(sumDir, sumName, await renderPdf(summaryHtml(p)));
-  log('  まとめPDF：' + sumName);
-
-  // 4) 未訪問一覧の更新
+  // 3) 未訪問一覧の更新
   const visited = new Set(p.reports.map((r) => r.targetId));
   const before = MANAGE.pending.length;
   MANAGE.pending = MANAGE.pending.filter((x) => !visited.has(x.targetId));
@@ -686,6 +680,7 @@ function indexEntry(r, t, p, file, pdf) {
     nextAction: r.nextAction, memo: r.memo, photoCount: (r.photos || []).length, added: !!t.added,
     target: { client: t.client, caseNo: t.caseNo, name: t.name, kana: t.kana, building: t.building, room: t.room, address: t.address, arrears: t.arrears, phone: t.phone, note: t.note },
     routeDate: p.routeDate, file, pdf,
+    pcEdited: !!r.pcEdited, editedAt: r.editedAt || '', editedBy: r.editedBy || '', phoneSavedAt: r.original ? r.original.savedAt : '',
   };
 }
 
@@ -716,21 +711,21 @@ function visitHtml(r, t, p) {
       <tr><th>メモ</th><td class="memo">${e(r.memo)}</td></tr>
     </table>
     ${(r.photos || []).length ? '<div><b>写真</b></div><div class="imgs">' + r.photos.map((ph) => '<img src="' + ph + '">').join('') + '</div>' : ''}
-    <div class="foot">出力 ${TV.dateTimeText(new Date())}　日報ID ${e(r.reportId)}</div>
+    <div class="foot">${r.pcEdited ? '最終修正 ' + e(TV.dateTimeText(r.editedAt)) + '（' + e(r.editedBy) + '）　' : ''}出力 ${TV.dateTimeText(new Date())}　日報ID ${e(r.reportId)}</div>
   </div>`;
 }
-function summaryHtml(p) {
+// 検索結果の一覧PDF（1日のまとめにも使う：期間と担当者で絞ってから出力）
+function listHtml(reps, cond) {
   const e = TV.esc;
-  const reps = p.reports.slice().sort((a, b) => a.visitedAt.localeCompare(b.visitedAt));
+  reps = reps.slice().sort((a, b) => a.visitedAt.localeCompare(b.visitedAt));
   const cnt = {}; reps.forEach((r) => cnt[r.result] = (cnt[r.result] || 0) + 1);
   return `<div class="pdfPage sum">
-    <h1>訪問日報（まとめ）</h1>
-    <div class="sub">${e((p.routeDate || '').replace(/-/g, '/'))}　担当：${e(p.staff)}　移動：${e(TV.MODES[p.mode] || p.mode || '')}</div>
-    <div style="margin-bottom:8px">訪問 ${reps.length}件（${Object.entries(cnt).map(([k, v]) => e(k) + ' ' + v).join('／') || 'なし'}）　未訪問 ${p.unvisited.length}件</div>
-    <table><thead><tr><th>No</th><th>時刻</th><th>依頼元</th><th>対象者</th><th>物件・号室</th><th>結果</th><th>面談相手</th><th>現地の様子</th><th>支払約束</th><th>次回</th><th>メモ</th></tr></thead><tbody>
-    ${reps.map((r, i) => { const t = r.target || {}; return `<tr><td>${i + 1}</td><td>${TV.hm(r.visitedAt)}</td><td>${e(t.client)}</td><td>${e(t.name)}${t.added ? '<br>(追加)' : ''}</td><td>${e(t.building)} ${e(t.room)}</td><td>${e(r.result)}</td><td>${e(r.contact)}</td><td>${e((r.signs || []).join('、'))}</td><td>${e([r.promiseDate ? r.promiseDate.replace(/-/g, '/') : '', r.promiseAmount ? TV.yen(r.promiseAmount) : ''].filter(Boolean).join(' '))}</td><td>${e(r.nextAction)}</td><td style="white-space:pre-wrap">${e(r.memo)}</td></tr>`; }).join('')}
+    <h1>訪問日報 一覧</h1>
+    <div class="sub">${e(cond)}</div>
+    <div style="margin-bottom:8px">${reps.length}件（${Object.entries(cnt).map(([k, v]) => e(k) + ' ' + v).join('／') || 'なし'}）</div>
+    <table><thead><tr><th>No</th><th>日時</th><th>担当</th><th>依頼元</th><th>対象者</th><th>物件・号室</th><th>結果</th><th>面談相手</th><th>現地の様子</th><th>支払約束</th><th>次回</th><th>メモ</th></tr></thead><tbody>
+    ${reps.map((r, i) => { const t = r.target || {}; return `<tr><td>${i + 1}</td><td>${TV.dateTimeText(r.visitedAt)}</td><td>${e(r.staff)}</td><td>${e(t.client)}</td><td>${e(t.name)}${t.added ? '<br>(追加)' : ''}</td><td>${e(t.building)} ${e(t.room)}</td><td>${e(r.result)}</td><td>${e(r.contact)}</td><td>${e((r.signs || []).join('、'))}</td><td>${e([r.promiseDate ? r.promiseDate.replace(/-/g, '/') : '', r.promiseAmount ? TV.yen(r.promiseAmount) : ''].filter(Boolean).join(' '))}</td><td>${e(r.nextAction)}</td><td style="white-space:pre-wrap">${e(r.memo)}</td></tr>`; }).join('')}
     </tbody></table>
-    ${p.unvisited.length ? '<div><b>未訪問</b></div><table><thead><tr><th>依頼元</th><th>対象者</th><th>物件・号室</th><th>住所</th></tr></thead><tbody>' + p.unvisited.map((u) => '<tr><td>' + e(u.client) + '</td><td>' + e(u.name) + '</td><td>' + e(u.building) + ' ' + e(u.room) + '</td><td>' + e(u.address) + '</td></tr>').join('') + '</tbody></table>' : ''}
     <div class="foot">出力 ${TV.dateTimeText(new Date())}</div>
   </div>`;
 }
@@ -782,9 +777,12 @@ function runSearch() {
   const words = TV.norm(document.getElementById('qText').value).toLowerCase().split(' ').filter(Boolean);
   const qc = document.getElementById('qClient').value, qr = document.getElementById('qResult').value, qs = document.getElementById('qStaff').value;
   const qf = document.getElementById('qFrom').value, qt = document.getElementById('qTo').value;
+  const qtr = document.getElementById('qTrans').value;
   const res = INDEX.reports.filter((r) => {
     const t = r.target;
     if (SEL_TARGET && r.targetId !== SEL_TARGET) return false;
+    if (qtr === 'no' && MANAGE.transferred[r.reportId]) return false;
+    if (qtr === 'yes' && !MANAGE.transferred[r.reportId]) return false;
     if (qc && t.client !== qc) return false;
     if (qr && r.result !== qr) return false;
     if (qs && r.staff !== qs) return false;
@@ -799,26 +797,86 @@ function runSearch() {
   }).sort((a, b) => b.visitedAt.localeCompare(a.visitedAt));
   document.getElementById('qCount').innerHTML = res.length + '件' + (SEL_TARGET ? '　<span class="tagr">1人の履歴だけ表示中</span> <button class="btn xs sub" id="unsel">解除</button>' : '');
   const us = document.getElementById('unsel'); if (us) us.onclick = () => { SEL_TARGET = null; runSearch(); };
-  tb.innerHTML = res.slice(0, 500).map((r) => `<tr class="click" data-id="${r.reportId}"><td>${TV.dateTimeText(r.visitedAt)}</td><td>${TV.esc(r.target.client)}</td><td>${TV.esc(r.target.name)}</td><td>${TV.esc(r.target.building)} ${TV.esc(r.target.room)}</td><td>${TV.esc(r.result)}</td><td>${TV.esc(r.nextAction)}</td><td>${TV.esc(r.staff)}</td></tr>`).join('') || '<tr><td colspan="7" class="muted">見つかりません。</td></tr>';
+  LAST_RES = res;
+  tb.innerHTML = res.slice(0, 500).map((r) => `<tr class="click${r.reportId === SEL_ID ? ' sel' : ''}" data-id="${r.reportId}"><td>${TV.dateTimeText(r.visitedAt)}</td><td>${TV.esc(r.target.client)}</td><td>${TV.esc(r.target.name)}</td><td>${TV.esc(r.target.building)} ${TV.esc(r.target.room)}</td><td>${TV.esc(r.result)}${r.pcEdited ? '<div class="muted">PC修正</div>' : ''}</td><td>${TV.esc(r.nextAction)}</td><td>${TV.esc(r.staff)}</td><td>${MANAGE.transferred[r.reportId] ? '<span class="good">済</span>' : ''}</td></tr>`).join('') || '<tr><td colspan="8" class="muted">見つかりません。</td></tr>';
   tb.querySelectorAll('tr.click').forEach((tr) => tr.onclick = () => { tb.querySelectorAll('tr').forEach((x) => x.classList.remove('sel')); tr.classList.add('sel'); showDetail(tr.dataset.id); });
 }
-['qText', 'qClient', 'qResult', 'qStaff', 'qFrom', 'qTo'].forEach((id) => document.getElementById(id).oninput = runSearch);
-document.getElementById('qClear').onclick = () => { ['qText', 'qClient', 'qResult', 'qStaff', 'qFrom', 'qTo'].forEach((id) => document.getElementById(id).value = ''); SEL_TARGET = null; runSearch(); };
+let LAST_RES = [], SEL_ID = null;
+const Q_IDS = ['qText', 'qClient', 'qResult', 'qStaff', 'qFrom', 'qTo', 'qTrans'];
+Q_IDS.forEach((id) => document.getElementById(id).oninput = runSearch);
+document.getElementById('qClear').onclick = () => { Q_IDS.forEach((id) => document.getElementById(id).value = ''); SEL_TARGET = null; runSearch(); };
+document.getElementById('listPdfBtn').onclick = async () => {
+  if (!needFolder()) return;
+  if (!LAST_RES.length) return alert('一覧に日報がありません。');
+  if (LAST_RES.length > 300 && !confirm(LAST_RES.length + '件あります。PDFにすると時間がかかります。続けますか？')) return;
+  const v = (id) => document.getElementById(id).value;
+  const sel = (id) => { const s = document.getElementById(id); return s.value ? s.options[s.selectedIndex].text : ''; };
+  const cond = [v('qFrom') || v('qTo') ? '期間 ' + (v('qFrom') || '').replace(/-/g, '/') + '～' + (v('qTo') || '').replace(/-/g, '/') : '', sel('qStaff') ? '担当 ' + sel('qStaff') : '', sel('qClient') ? '依頼元 ' + sel('qClient') : '', sel('qResult') ? '結果 ' + sel('qResult') : '', v('qText') ? 'キーワード「' + v('qText') + '」' : ''].filter(Boolean).join('　') || '条件なし（すべて）';
+  const btn = document.getElementById('listPdfBtn'); btn.disabled = true; btn.textContent = 'PDFを作成中…';
+  try {
+    const now = new Date();
+    const dir = await dirPath(['まとめPDF', TV.ymd(now, '-').slice(0, 7)], true);
+    const name = await uniqueName(dir, '一覧_' + TV.ymd(now) + '_' + TV.hm(now).replace(':', ''), '.pdf');
+    const blob = await renderPdf(listHtml(LAST_RES, cond));
+    await writeFile(dir, name, blob);
+    window.open(URL.createObjectURL(blob), '_blank');
+  } catch (e) { alert('PDFを作れませんでした：' + e.message); }
+  finally { btn.disabled = false; btn.textContent = '表示中の一覧をPDFにする'; }
+};
 
 async function fileByPath(path) {
   const parts = path.split('/'); const name = parts.pop();
   const dir = await dirPath(parts, false);
   return (await dir.getFileHandle(name)).getFile();
 }
+// 日報データファイルから1件を丸ごと（写真つきで）読む
+async function loadFull(entry) {
+  const data = JSON.parse(await (await fileByPath(entry.file)).text());
+  const r = data.reports.find((x) => x.reportId === entry.reportId);
+  if (!r) throw new Error('日報データの中に見つかりません');
+  return { data, r };
+}
+
+// 基幹システムに貼る文章
+function transferText(r) {
+  const t = r.target || {};
+  const promise = [r.promiseDate ? r.promiseDate.replace(/-/g, '/') : '', r.promiseAmount ? TV.yen(r.promiseAmount) : ''].filter(Boolean).join(' ');
+  return [
+    '【' + TV.dateTimeText(r.visitedAt) + ' 訪問】担当：' + (r.staff || ''),
+    '訪問先：' + [t.building, t.room].filter(Boolean).join(' '),
+    '結果：' + r.result + (r.contact ? '（' + r.contact + '）' : ''),
+    (r.signs || []).length ? '現地の様子：' + r.signs.join('、') : '',
+    promise ? '支払約束：' + promise : '',
+    r.nextAction ? '次回：' + r.nextAction : '',
+    r.memo ? 'メモ：' + r.memo : '',
+  ].filter(Boolean).join('\n');
+}
+async function copyToClipboard(text) {
+  try { await navigator.clipboard.writeText(text); return true; }
+  catch (e) {
+    const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select();
+    const ok = document.execCommand('copy'); ta.remove(); return ok;
+  }
+}
+
 async function showDetail(id) {
+  SEL_ID = id;
   const r = INDEX.reports.find((x) => x.reportId === id); if (!r) return;
   const t = r.target, e = TV.esc;
   const box = document.getElementById('detailBox');
   const n = INDEX.reports.filter((x) => x.targetId === r.targetId).length;
+  const tr = MANAGE.transferred[id];
   box.innerHTML = `<h2 style="margin-top:0">${e(t.name)} <span class="muted">${e(t.kana || '')}</span></h2>
     <div>${e(t.building)} ${e(t.room)}　<span class="tagr">${e(t.client)}</span>${t.caseNo ? '<span class="tagr">案件 ' + e(t.caseNo) + '</span>' : ''}</div>
     <div class="muted">${e(t.address)}</div>
     <div style="margin:6px 0">滞納額：${e(TV.yen(t.arrears))}　電話：${e(t.phone || '')}</div>
+    <div style="margin:10px 0; display:flex; gap:8px; flex-wrap:wrap">
+      <button class="btn ok" id="copyBtn">基幹用にコピー</button>
+      <button class="btn" id="editBtn">編集</button>
+      <button class="btn sub" id="pdfBtn">PDFを出力</button>
+      <button class="btn sub" id="onlyThis">この人の訪問履歴（${n}件）</button>
+    </div>
+    <div class="muted" id="transInfo">${tr ? '<span class="good">基幹へ転記済み（' + TV.dateTimeText(tr) + '）</span> <button class="btn xs sub" id="untrans">転記済みを取り消す</button>' : '基幹へはまだ転記していません。'}</div>
     <table style="margin-top:8px">
       <tr><th style="width:110px">訪問日時</th><td>${TV.dateTimeText(r.visitedAt)}（担当 ${e(r.staff)}）</td></tr>
       <tr><th>訪問結果</th><td><b>${e(r.result)}</b>${r.contact ? '（' + e(r.contact) + '）' : ''}</td></tr>
@@ -827,24 +885,138 @@ async function showDetail(id) {
       <tr><th>次回アクション</th><td>${e(r.nextAction)}</td></tr>
       <tr><th>メモ</th><td class="detail">${e(r.memo)}</td></tr>
       <tr><th>備考</th><td>${e(t.note || '')}</td></tr>
+      ${r.pcEdited ? '<tr><th>修正</th><td>' + e(TV.dateTimeText(r.editedAt)) + '（' + e(r.editedBy) + '）</td></tr>' : ''}
     </table>
-    <div class="photosRow" id="dPhotos">${r.photoCount ? '<span class="muted">写真を読み込み中…</span>' : ''}</div>
-    <div style="margin-top:10px; display:flex; gap:8px">
-      <button class="btn" id="openPdf">PDFを開く</button>
-      <button class="btn sub" id="onlyThis">この人の訪問履歴（${n}件）</button>
-    </div>`;
-  document.getElementById('openPdf').onclick = async () => {
-    try { const f = await fileByPath(r.pdf); window.open(URL.createObjectURL(f), '_blank'); }
-    catch (err) { alert('PDFが見つかりません：' + r.pdf); }
-  };
+    <div class="photosRow" id="dPhotos">${r.photoCount ? '<span class="muted">写真を読み込み中…</span>' : ''}</div>`;
   document.getElementById('onlyThis').onclick = () => { SEL_TARGET = r.targetId; runSearch(); };
+  document.getElementById('editBtn').onclick = () => showEdit(id);
+  document.getElementById('copyBtn').onclick = async () => {
+    if (!(await copyToClipboard(transferText(r)))) return alert('コピーできませんでした。');
+    MANAGE.transferred[id] = new Date().toISOString(); await saveManage();
+    runSearch(); await showDetail(id);
+    document.getElementById('transInfo').insertAdjacentHTML('afterbegin', '<b class="good">コピーしました。基幹システムの入力欄に貼り付けてください（Ctrl+V）。</b><br>');
+  };
+  const un = document.getElementById('untrans');
+  if (un) un.onclick = async () => { delete MANAGE.transferred[id]; await saveManage(); runSearch(); showDetail(id); };
+  document.getElementById('pdfBtn').onclick = () => outputPdf(id);
   if (r.photoCount) {
     try {
-      const data = JSON.parse(await (await fileByPath(r.file)).text());
-      const full = data.reports.find((x) => x.reportId === id);
+      const { r: full } = await loadFull(r);
       document.getElementById('dPhotos').innerHTML = (full.photos || []).map((p) => '<a href="' + p + '" target="_blank"><img src="' + p + '"></a>').join('');
     } catch (err) { document.getElementById('dPhotos').innerHTML = '<span class="bad">写真を読み込めませんでした</span>'; }
   }
+}
+
+// 1件のPDFを、その時点の内容で作って開く
+async function outputPdf(id) {
+  const entry = INDEX.reports.find((x) => x.reportId === id);
+  const btn = document.getElementById('pdfBtn'); if (btn) { btn.disabled = true; btn.textContent = 'PDFを作成中…'; }
+  try {
+    const { data, r } = await loadFull(entry);
+    const t = r.target || {}, d = new Date(r.visitedAt), month = TV.ymd(d, '-').slice(0, 7);
+    const dir = await dirPath(['日報PDF', month], true);
+    const base = [TV.ymd(d), t.client, t.name, (t.building || '') + (t.room || ''), r.result].map(TV.safeFileName).join('_');
+    let name = entry.pdf && entry.pdf.startsWith('日報PDF/' + month + '/') && entry.pdf.split('/').pop().startsWith(base) ? entry.pdf.split('/').pop() : await uniqueName(dir, base, '.pdf');
+    const blob = await renderPdf(visitHtml(r, t, data));
+    await writeFile(dir, name, blob);
+    entry.pdf = '日報PDF/' + month + '/' + name; await saveIndex();
+    window.open(URL.createObjectURL(blob), '_blank');
+  } catch (e) { alert('PDFを作れませんでした：' + e.message); }
+  finally { if (btn) { btn.disabled = false; btn.textContent = 'PDFを出力'; } }
+}
+
+// 編集画面
+async function showEdit(id) {
+  const entry = INDEX.reports.find((x) => x.reportId === id);
+  let loaded;
+  try { loaded = await loadFull(entry); } catch (e) { return alert('日報データを読めませんでした：' + e.message); }
+  const r = JSON.parse(JSON.stringify(loaded.r));
+  const t = r.target = r.target || {};
+  r.signs = r.signs || []; r.photos = r.photos || [];
+  const e = TV.esc;
+  const opts = (list, v, blank) => (blank ? '<option value="">（なし）</option>' : '') + list.map((x) => '<option' + (x === v ? ' selected' : '') + '>' + e(x) + '</option>').join('');
+  const inp = (k, label, v, w) => '<label>' + label + '<input type="text" data-t="' + k + '" value="' + e(v == null ? '' : v) + '" style="width:' + (w || 160) + 'px"></label>';
+  const box = document.getElementById('detailBox');
+  const local = (iso) => { const d = new Date(iso); return TV.ymd(d, '-') + 'T' + TV.hm(d); };
+  box.innerHTML = `<h2 style="margin-top:0">日報の編集</h2>
+    <div class="muted" style="margin-bottom:8px">保存すると検索結果にすぐ反映されます。携帯で書いた元の内容は別に保管します。</div>
+    <div class="form">
+      <label>訪問日時<input type="datetime-local" id="e_visitedAt" value="${local(r.visitedAt)}"></label>
+      <label>訪問結果<select id="e_result">${opts(TV.RESULTS, r.result)}</select></label>
+      <label>面談相手<select id="e_contact">${opts(TV.CONTACTS, r.contact, true)}</select></label>
+      <label>次回アクション<select id="e_nextAction">${opts(TV.NEXT_ACTIONS, r.nextAction, true)}</select></label>
+    </div>
+    <div style="margin:10px 0 4px; font-size:12px; color:#444">現地の様子</div>
+    <div>${TV.SIGNS.map((s) => '<label style="margin-right:12px"><input type="checkbox" data-sign="' + e(s) + '"' + (r.signs.includes(s) ? ' checked' : '') + '> ' + e(s) + '</label>').join('')}</div>
+    <div class="form" style="margin-top:10px">
+      <label>支払約束日<input type="date" id="e_promiseDate" value="${e(r.promiseDate || '')}"></label>
+      <label>約束金額（円）<input type="text" id="e_promiseAmount" value="${e(r.promiseAmount || '')}" style="width:120px"></label>
+    </div>
+    <div style="margin:10px 0 4px; font-size:12px; color:#444">メモ</div>
+    <textarea id="e_memo" style="width:100%; min-height:140px; font-size:14px; padding:8px; border:1px solid var(--line); border-radius:5px">${e(r.memo || '')}</textarea>
+    <div style="margin:10px 0 4px; font-size:12px; color:#444">写真（${TV.MAX_PHOTOS}枚まで）</div>
+    <div class="photosRow" id="e_photos"></div>
+    <input type="file" id="e_photoFile" accept="image/*" multiple hidden>
+    <button class="btn xs sub" id="e_addPhoto" style="margin-top:4px">写真を追加</button>
+    <details style="margin-top:12px"><summary>対象者・物件の情報を直す</summary>
+      <div class="form" style="margin-top:8px">
+        ${inp('caseNo', '案件番号', t.caseNo, 100)}${inp('name', '対象者名', t.name)}${inp('kana', 'フリガナ', t.kana)}
+        ${inp('building', '物件名', t.building, 200)}${inp('room', '号室', t.room, 70)}${inp('address', '住所', t.address, 320)}
+        ${inp('arrears', '滞納額', t.arrears, 100)}${inp('phone', '電話番号', t.phone, 130)}${inp('note', '備考', t.note, 320)}
+      </div>
+      <div class="muted">依頼元は変えられません（変えると別の人として扱われるため）。</div>
+    </details>
+    <div style="margin-top:14px; display:flex; gap:8px">
+      <button class="btn ok" id="e_save">保存</button>
+      <button class="btn sub" id="e_cancel">やめる</button>
+    </div>`;
+  const drawPh = () => {
+    const pb = document.getElementById('e_photos');
+    pb.innerHTML = r.photos.map((p, i) => '<span style="position:relative; display:inline-block"><img src="' + p + '"><button class="btn xs warn" data-i="' + i + '" style="position:absolute; top:6px; right:6px">削除</button></span>').join('') || '<span class="muted">なし</span>';
+    pb.querySelectorAll('[data-i]').forEach((b) => b.onclick = () => { r.photos.splice(+b.dataset.i, 1); drawPh(); });
+  };
+  drawPh();
+  const pf = document.getElementById('e_photoFile');
+  document.getElementById('e_addPhoto').onclick = () => { pf.value = ''; pf.click(); };
+  pf.onchange = async () => {
+    for (const f of pf.files) {
+      if (r.photos.length >= TV.MAX_PHOTOS) { alert('写真は' + TV.MAX_PHOTOS + '枚までです。'); break; }
+      try { r.photos.push(await TV.shrinkPhoto(f)); } catch (err) { alert('写真を読み込めませんでした：' + f.name); }
+    }
+    drawPh();
+  };
+  document.getElementById('e_cancel').onclick = () => showDetail(id);
+  document.getElementById('e_save').onclick = async () => {
+    const g = (k) => document.getElementById('e_' + k).value;
+    const amt = TV.norm(g('promiseAmount')).replace(/[,円]/g, '');
+    if (amt && isNaN(Number(amt))) return alert('約束金額は数字で入れてください。');
+    if (!SET.pcUser) {
+      const u = TV.norm(prompt('修正した人の名前を入れてください（次回から自動で入ります）') || '');
+      if (!u) return;
+      SET.pcUser = u; saveSet();
+    }
+    const now = new Date().toISOString();
+    r.visitedAt = g('visitedAt') ? new Date(g('visitedAt')).toISOString() : r.visitedAt;
+    r.result = g('result'); r.contact = g('contact'); r.nextAction = g('nextAction');
+    r.signs = [...document.querySelectorAll('[data-sign]')].filter((c) => c.checked).map((c) => c.dataset.sign);
+    r.promiseDate = g('promiseDate'); r.promiseAmount = amt; r.memo = document.getElementById('e_memo').value;
+    document.querySelectorAll('[data-t]').forEach((i) => { t[i.dataset.t] = TV.norm(i.value); });
+    t.arrears = t.arrears ? Number(String(t.arrears).replace(/[,円]/g, '')) || '' : '';
+    // 携帯で書いた元の内容（写真以外）を最初の修正のときだけ保管
+    if (!r.original) { const o = JSON.parse(JSON.stringify(loaded.r)); delete o.photos; o.photoCount = (loaded.r.photos || []).length; r.original = o; }
+    r.pcEdited = true; r.editedAt = now; r.editedBy = SET.pcUser; r.savedAt = now;
+    r.editHistory = (r.editHistory || []).concat({ at: now, by: SET.pcUser });
+    try {
+      const { data } = await loadFull(entry); // 最新を読み直して1件だけ差し替える
+      const i = data.reports.findIndex((x) => x.reportId === id);
+      data.reports[i] = r;
+      const parts = entry.file.split('/'); const fname = parts.pop();
+      await writeFile(await dirPath(parts, false), fname, JSON.stringify(data));
+      Object.assign(entry, indexEntry(r, t, data, entry.file, entry.pdf || ''));
+      await saveIndex();
+    } catch (err) { return alert('保存できませんでした：' + err.message); }
+    initSearchOptions(); runSearch(); showDetail(id);
+  };
 }
 
 // 索引を作り直す（日報データフォルダを全部読む）
