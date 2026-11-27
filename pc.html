@@ -128,8 +128,10 @@
         <ol id="routeList"></ol>
         <div style="display:flex; gap:8px; margin-top:8px">
           <button class="btn sub" id="reorderBtn">近い順に並べ直す</button>
+          <button class="btn sub" id="gmapBtn">Googleマップでルートを開く</button>
           <button class="btn ok" id="saveRouteBtn">ルートファイルを保存（携帯へメールで送る）</button>
         </div>
+        <div id="gmapLinks" class="muted" style="margin-top:6px"></div>
       </div>
     </div>
     <div id="map"></div>
@@ -552,8 +554,19 @@ function drawRoute() {
   ol.querySelectorAll('[data-down]').forEach((b) => b.onclick = () => { const i = +b.dataset.down; if (i < ROUTE.length - 1) { [ROUTE[i + 1], ROUTE[i]] = [ROUTE[i], ROUTE[i + 1]]; drawRoute(); } });
   ol.querySelectorAll('[data-rm]').forEach((b) => b.onclick = () => { ROUTE.splice(+b.dataset.rm, 1); drawRoute(); });
   document.getElementById('routeInfo').textContent = ROUTE.length && START ? '（' + ROUTE.length + '件・直線距離で約' + TV.routeLengthKm(START, ROUTE).toFixed(1) + 'km）' : '';
+  document.getElementById('gmapLinks').innerHTML = '';
   drawMap();
 }
+document.getElementById('gmapBtn').onclick = () => {
+  if (!ROUTE.length || !START) return alert('先にルートを組んでください。');
+  const mode = document.getElementById('rMode').value;
+  const links = TV.googleRouteLinks(START, ROUTE, mode);
+  const box = document.getElementById('gmapLinks');
+  if (links.length === 1) { box.innerHTML = ''; window.open(links[0].url, '_blank'); return; }
+  box.innerHTML = (mode === 'transit' ? '電車・徒歩は経由地を使えないため、1区間ずつ開きます：<br>' : '訪問先が多いため分けています（1回に開けるのは10か所まで）：<br>') +
+    links.map((l) => '<a href="' + l.url + '" target="_blank" rel="noopener">Googleマップ（' + TV.esc(l.label) + '）</a>').join('　');
+};
+document.getElementById('rMode').addEventListener('change', () => { document.getElementById('gmapLinks').innerHTML = ''; });
 
 document.getElementById('saveRouteBtn').onclick = async () => {
   if (!ROUTE.length) return alert('先にルートを組んでください。');

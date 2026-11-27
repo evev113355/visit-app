@@ -143,6 +143,25 @@ TV.shrinkPhoto = async function (file) {
   } finally { URL.revokeObjectURL(url); }
 };
 
+// ルート全体を Googleマップで開くリンク（APIキー不要）。
+// 1本のリンクに入る経由地は9か所までなので、多いときは区切る。電車は経由地が使えないので1区間ずつ。
+TV.googleRouteLinks = function (start, stops, mode) {
+  const pt = (p) => (p.lat != null && p.lat !== '' ? (+p.lat).toFixed(6) + ',' + (+p.lng).toFixed(6) : encodeURIComponent(p.address || ''));
+  const link = (from, list) => {
+    const dest = list[list.length - 1], mid = list.slice(0, -1);
+    return 'https://www.google.com/maps/dir/?api=1&origin=' + pt(from) + '&destination=' + pt(dest) +
+      (mid.length ? '&waypoints=' + mid.map(pt).join('%7C') : '') + '&travelmode=' + (mode || 'driving');
+  };
+  const out = [];
+  const size = mode === 'transit' ? 1 : 10; // 経由地9＋目的地1
+  for (let i = 0; i < stops.length; i += size) {
+    const part = stops.slice(i, i + size);
+    const from = i === 0 ? start : stops[i - 1];
+    out.push({ label: (i === 0 ? '出発' : (i) + '番') + '→' + (i + part.length) + '番', url: link(from, part) });
+  }
+  return out;
+};
+
 TV.routeLengthKm = function (start, stops) {
   let s = 0, cur = start;
   stops.forEach((p) => { if (p.lat != null && cur.lat != null) { s += TV.dist(cur, p); cur = p; } });
