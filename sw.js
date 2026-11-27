@@ -1,5 +1,5 @@
 // 携帯アプリの画面を端末に保存して、圏外でも開けるようにする
-const CACHE = 'tainou-mobile-v0.1.0';
+const CACHE = 'tainou-mobile-v0.2.0';
 const FILES = ['./', './index.html', './common.js', './manifest.json', './icon.svg'];
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(FILES)).then(() => self.skipWaiting()));

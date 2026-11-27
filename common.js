@@ -1,13 +1,18 @@
 // 滞納訪問アプリ 共通定義（PC・携帯の両方で使う）
 const TV = {
-  APP_VERSION: '0.1.0',
+  APP_VERSION: '0.2.0',
   ROUTE_TYPE: 'tainou-route',
   REPORT_TYPE: 'tainou-report',
   DEFAULT_START: { label: '事務所', address: '大阪府大阪市北区西天満4-12-22' },
   DEFAULT_CLIENTS: ['出向', 'TAKUTO'],
-  RESULTS: ['面談', '不在', '不在票投函', '応答なし', '転居・空室の疑い', '面談拒否', 'その他'],
+  RESULTS: ['面談', '不在', '不在票投函', '名刺投函', '請求書投函', '応答なし', '転居・空室の疑い', '面談拒否', 'その他'],
   CONTACTS: ['本人', '家族', '同居人', '管理会社', '近隣', 'その他'],
-  SIGNS: ['電気メーター回転', '郵便物たまり', '洗濯物あり', '表札なし', '車・自転車あり'],
+  SIGNS: ['電気メーター回転', '郵便物たまり', '洗濯物あり', '表札なし', '車・自転車あり', 'その他'],
+  METERS: [
+    { key: 'elec', label: '電気', unit: 'kWh', code: '電気メーター' },
+    { key: 'gas', label: 'ガス', unit: 'm³', code: 'ガスメーター' },
+    { key: 'water', label: '水道', unit: 'm³', code: '水道メーター' },
+  ],
   NEXT_ACTIONS: ['再訪問', '架電', '書面送付', '保証会社へ報告', '終了'],
   MODES: {
     driving: '車',
@@ -73,6 +78,36 @@ TV.safeFileName = function (s) {
 };
 TV.esc = function (s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+};
+
+// 現地の様子（「その他」は記入内容を括弧で付ける）
+TV.signsText = function (r) {
+  return (r.signs || []).map((s) => (s === 'その他' && TV.norm(r.signsOther) ? 'その他（' + TV.norm(r.signsOther) + '）' : s)).join('、');
+};
+// メーター値：数字だけにそろえる（全角・カンマ・単位を外す）。数字でなければ空
+TV.meterValue = function (v) {
+  const s = TV.norm(v).replace(/[,\s]|kwh|m3|m³/gi, '');
+  return s !== '' && !isNaN(Number(s)) ? s : '';
+};
+TV.num = function (v) { return Number(v).toLocaleString('ja-JP', { maximumFractionDigits: 3 }); };
+// 「電気 12,345.6kWh／ガス 1,024.37m³」
+TV.metersText = function (meters) {
+  meters = meters || {};
+  return TV.METERS.filter((m) => TV.meterValue(meters[m.key]) !== '').map((m) => m.label + ' ' + TV.num(meters[m.key]) + m.unit).join('／');
+};
+// 前回との差：{ text, kind } kind = up / same / down
+TV.meterDiff = function (cur, prev, unit) {
+  cur = TV.meterValue(cur); prev = TV.meterValue(prev);
+  if (cur === '' || prev === '') return null;
+  const d = Math.round((Number(cur) - Number(prev)) * 1000) / 1000;
+  if (d > 0) return { kind: 'up', text: '+' + TV.num(d) + (unit || '') };
+  if (d === 0) return { kind: 'same', text: '変化なし' };
+  return { kind: 'down', text: TV.num(d) + (unit || '') + '（前回より小さい：読み間違い？）' };
+};
+// 前回のメーター値との差を1行にまとめる（prevMeters：{elec,gas,water}、prevDate：前回の日付）
+TV.meterDiffText = function (meters, prevMeters, prevDate) {
+  const parts = TV.METERS.map((m) => { const d = TV.meterDiff((meters || {})[m.key], (prevMeters || {})[m.key], m.unit); return d ? m.label + ' ' + d.text : ''; }).filter(Boolean);
+  return parts.length ? parts.join('／') + (prevDate ? '（' + TV.ymd(prevDate, '/').slice(5) + 'から）' : '') : '';
 };
 
 // 国土地理院の住所検索（無料・キー不要）
@@ -171,7 +206,7 @@ TV.listPdf = async function (reps, cond, stage) {
   const cnt = {}; reps.forEach((r) => cnt[r.result] = (cnt[r.result] || 0) + 1);
   const summary = reps.length + '件（' + (Object.entries(cnt).map(([k, n]) => k + ' ' + n).join('／') || 'なし') + '）';
   const W = 1123, H = 794; // A4横（96dpi）
-  const COLS = [['No', 3], ['訪問日時', 7.5], ['担当', 7], ['依頼元', 6.5], ['対象者', 8], ['物件・号室', 11.5], ['結果', 7], ['面談相手', 5.5], ['現地の様子', 10.5], ['支払約束', 7.5], ['次回', 8.5], ['メモ', 17.5]];
+  const COLS = [['No', 3], ['訪問日時', 7.5], ['担当', 7], ['依頼元', 6.5], ['対象者', 8], ['物件・号室', 11.5], ['結果', 7], ['面談相手', 5.5], ['現地の様子・メーター', 10.5], ['支払約束', 7.5], ['次回', 8.5], ['メモ', 17.5]];
   const css = '<style>' +
     '.lp{width:' + W + 'px;height:' + H + 'px;padding:30px 34px 22px;background:#fff;color:#111;font-family:"Yu Gothic","Meiryo",sans-serif;box-sizing:border-box;display:flex;flex-direction:column}' +
     '.lp .hd{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2px solid #1f4e79;padding-bottom:6px;margin-bottom:10px}' +
@@ -191,7 +226,7 @@ TV.listPdf = async function (reps, cond, stage) {
     const d = r.visitedAt ? TV.ymd(r.visitedAt, '/') + '<br>' + TV.hm(r.visitedAt) : '';
     const promise = [r.promiseDate ? String(r.promiseDate).replace(/-/g, '/') : '', r.promiseAmount ? TV.yen(r.promiseAmount) : ''].filter(Boolean).map(e).join('<br>');
     return '<tr><td class="c">' + (i + 1) + '</td><td>' + d + '</td><td>' + e(r.staff) + '</td><td>' + e(t.client) + '</td><td>' + e(t.name) + (r.added || t.added ? '<br><span style="color:#8e6c00">（追加訪問）</span>' : '') + '</td>' +
-      '<td>' + e(t.building) + ' ' + e(t.room) + '</td><td><b>' + e(r.result) + '</b></td><td>' + e(r.contact) + '</td><td>' + e((r.signs || []).join('、')) + '</td>' +
+      '<td>' + e(t.building) + ' ' + e(t.room) + '</td><td><b>' + e(r.result) + '</b></td><td>' + e(r.contact) + '</td><td>' + e(TV.signsText(r)) + (TV.metersText(r.meters) ? '<div style="margin-top:2px;color:#1f4e79">' + e(TV.metersText(r.meters)) + '</div>' : '') + '</td>' +
       '<td>' + promise + '</td><td>' + e(r.nextAction) + '</td><td class="memo">' + e(r.memo) + '</td></tr>';
   };
   const now = TV.dateTimeText(new Date());

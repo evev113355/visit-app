@@ -51,6 +51,17 @@
   .rep { border-top:1px dashed var(--line); padding-top:8px; margin-top:8px; font-size:14px; }
   .warnbox { background:#fff4e5; border:1px solid #f0b46c; border-radius:8px; padding:10px; font-size:14px; }
   a.tel { color:var(--accent); }
+  .tag.prev { background:#fff4e5; color:#8a5300; }
+  .prevbox { background:#fff4e5; border:1px solid #f0b46c; border-radius:8px; padding:10px; font-size:14px; margin-top:10px; line-height:1.6; }
+  .prevbox.none { background:#f3f5f8; border-color:var(--line); color:#555; }
+  .meter { display:flex; align-items:center; gap:8px; margin-top:6px; }
+  .meter .ml { flex:0 0 40px; font-weight:bold; }
+  .meter .mu { flex:0 0 36px; color:#555; }
+  .meter input { flex:1; text-align:right; }
+  .mdiff { font-size:13px; margin:2px 0 0 48px; min-height:4px; color:#555; }
+  .mdiff.up { color:var(--ok); font-weight:bold; }
+  .mdiff.same { color:#8a5300; font-weight:bold; }
+  .mdiff.down { color:var(--warn); }
 </style>
 </head>
 <body>
@@ -158,6 +169,7 @@ function viewHome() {
           <div>${TV.esc(s.building)} ${TV.esc(s.room)}</div>
           <div class="muted">${TV.esc(s.address)}</div>
           <div><span class="tag">${TV.esc(s.client)}</span>${reps.map((r) => '<span class="tag ok">' + TV.hm(r.visitedAt) + ' ' + TV.esc(r.result) + '</span>').join('')}</div>
+          ${s.prev ? '<div><span class="tag prev">前回 ' + TV.ymd(s.prev.visitedAt, '/').slice(5) + ' ' + TV.esc(s.prev.result) + '</span></div>' : s.prev === null ? '<div><span class="tag">初めての訪問</span></div>' : ''}
         </div></div>`;
     });
     html += `<button class="btn sub" id="addExtra">＋ ルートにない訪問先を追加</button>
@@ -180,6 +192,27 @@ function viewHome() {
 
 function findStop(tid) { return allStops().find((s) => s.targetId === tid); }
 
+// 比べる相手のメーター値：今日この携帯で先に書いた日報（メーターあり）→ なければルートに載っている前回の訪問
+function prevMeters(tid, exceptRid) {
+  const mine = S.current.reports.filter((x) => x.targetId === tid && x.reportId !== exceptRid && x.meters && TV.metersText(x.meters))
+    .sort((a, b) => b.visitedAt.localeCompare(a.visitedAt))[0];
+  if (mine) return { date: mine.visitedAt, meters: mine.meters };
+  const s = findStop(tid);
+  if (s && s.prev && s.prev.meters && TV.metersText(s.prev.meters)) return { date: s.prev.metersDate || s.prev.visitedAt, meters: s.prev.meters };
+  return { date: '', meters: { elec: '', gas: '', water: '' } };
+}
+function prevHtml(s) {
+  if (s.prev === undefined) return '';
+  if (!s.prev) return '<div class="prevbox none">初めての訪問です（前回の記録なし）</div>';
+  const p = s.prev;
+  return '<div class="prevbox"><b>前回の訪問　' + TV.ymd(p.visitedAt, '/') + ' ' + TV.esc(p.result) + '</b>' + (p.contact ? '（' + TV.esc(p.contact) + '）' : '') +
+    '<div>担当 ' + TV.esc(p.staff || '') + (s.visitCount ? '　これまで' + s.visitCount + '回訪問' : '') + '</div>' +
+    (TV.signsText(p) ? '<div>現地の様子：' + TV.esc(TV.signsText(p)) + '</div>' : '') +
+    (TV.metersText(p.meters) ? '<div>メーター：' + TV.esc(TV.metersText(p.meters)) + '</div>' : '') +
+    (p.nextAction ? '<div>次回：' + TV.esc(p.nextAction) + '</div>' : '') +
+    (p.memo ? '<div class="muted">メモ：' + TV.esc(p.memo) + '</div>' : '') + '</div>';
+}
+
 function viewStop(tid) {
   const s = findStop(tid);
   const mode = S.current.route ? S.current.route.mode : 'driving';
@@ -195,6 +228,7 @@ function viewStop(tid) {
       ${s.arrears !== '' && s.arrears != null ? '<div style="margin-top:6px">滞納額：<b>' + TV.yen(s.arrears) + '</b></div>' : ''}
       ${s.phone ? '<div>電話：<a class="tel" href="tel:' + TV.esc(s.phone) + '">' + TV.esc(s.phone) + '</a></div>' : ''}
       ${s.note ? '<div class="warnbox" style="margin-top:8px">' + TV.esc(s.note) + '</div>' : ''}
+      ${prevHtml(s)}
     </div>
     <a class="btn sub" href="${TV.navUrl(s, mode)}" target="_blank" rel="noopener">ここへナビ（Googleマップ）</a>
     <button class="btn" id="arrive">${reps.length ? '再訪問（もう1件日報を書く）' : '到着した（日報を書く）'}</button>
@@ -232,8 +266,14 @@ function viewForm(tid, rid) {
   const old = rid ? S.current.reports.find((r) => r.reportId === rid) : null;
   const r = old ? JSON.parse(JSON.stringify(old)) : {
     reportId: TV.uuid(), targetId: tid, visitedAt: new Date().toISOString(), staff: S.staff,
-    result: '', contact: '', signs: [], promiseDate: '', promiseAmount: '', nextAction: '', memo: '', photos: [],
+    result: '', contact: '', signs: [], signsOther: '', meters: { elec: '', gas: '', water: '' }, promiseDate: '', promiseAmount: '', nextAction: '', memo: '', photos: [],
   };
+  r.meters = Object.assign({ elec: '', gas: '', water: '' }, r.meters || {});
+  r.signsOther = r.signsOther || '';
+  const pm = prevMeters(tid, r.reportId);
+  const meterRow = (m) => `<div class="meter"><span class="ml">${m.label}</span>
+      <input type="text" inputmode="decimal" id="m_${m.key}" value="${TV.esc(r.meters[m.key])}" placeholder="${pm.meters[m.key] !== '' && pm.meters[m.key] != null ? '前回 ' + TV.esc(TV.num(pm.meters[m.key])) : ''}"><span class="mu">${m.unit}</span></div>
+      <div class="mdiff" id="d_${m.key}"></div>`;
   setHeader(old ? '日報を直す' : '日報を書く', '<button id="backBtn">戻る</button>');
   document.getElementById('backBtn').onclick = () => { if (confirm('入力内容を保存せずに戻りますか？')) viewStop(tid); };
   app.innerHTML = `
@@ -248,6 +288,12 @@ function viewForm(tid, rid) {
     </div>
     <label class="f">現地の様子（あてはまるもの全部）</label>
     ${choiceHtml('signs', TV.SIGNS, r.signs, true)}
+    <div id="otherBox" style="display:${r.signs.includes('その他') ? 'block' : 'none'}; margin-top:8px">
+      <textarea id="signsOther" style="min-height:60px" placeholder="その他の様子（例：ドアノブにチラシが挟まったまま）">${TV.esc(r.signsOther)}</textarea>
+    </div>
+    <label class="f">メーターの数値（読めたものだけ）</label>
+    ${TV.METERS.map(meterRow).join('')}
+    ${pm.date ? '<div class="muted">前回の数値：' + TV.ymd(pm.date, '/') + ' の記録</div>' : ''}
     <label class="f">支払約束（あれば）</label>
     <div class="row"><input type="date" id="promiseDate" value="${TV.esc(r.promiseDate)}"><input type="number" inputmode="numeric" id="promiseAmount" placeholder="金額（円）" value="${TV.esc(r.promiseAmount)}"></div>
     <label class="f">次回アクション</label>
@@ -269,12 +315,23 @@ function viewForm(tid, rid) {
         r[name] = r[name] === v ? '' : v;
       }
       box.querySelectorAll('button').forEach((x) => x.classList.toggle('on', box.dataset.multi === '1' ? r[name].includes(x.dataset.v) : r[name] === x.dataset.v));
+      if (name === 'signs') document.getElementById('otherBox').style.display = r.signs.includes('その他') ? 'block' : 'none';
       if (name === 'result') {
         document.getElementById('contactBox').style.display = r.result === '面談' ? 'block' : 'none';
         if (r.result !== '面談') { r.contact = ''; document.querySelectorAll('[data-name=contact] button').forEach((x) => x.classList.remove('on')); }
       }
     };
   });
+
+  const showDiff = (m) => {
+    const el = document.getElementById('d_' + m.key);
+    const cur = document.getElementById('m_' + m.key).value;
+    if (TV.norm(cur) !== '' && TV.meterValue(cur) === '') { el.className = 'mdiff down'; el.textContent = '数字で入れてください'; return; }
+    const d = TV.meterDiff(cur, pm.meters[m.key], m.unit);
+    el.className = 'mdiff ' + (d ? d.kind : '');
+    el.textContent = d ? '前回 ' + TV.num(pm.meters[m.key]) + ' → ' + (d.kind === 'up' ? d.text + ' 増えています' : d.text) : (TV.meterValue(cur) !== '' && pm.date ? '前回の記録なし' : '');
+  };
+  TV.METERS.forEach((m) => { document.getElementById('m_' + m.key).oninput = () => showDiff(m); showDiff(m); });
 
   const drawPhotos = () => {
     const box = document.getElementById('photos');
@@ -300,6 +357,12 @@ function viewForm(tid, rid) {
     r.promiseDate = document.getElementById('promiseDate').value;
     r.promiseAmount = document.getElementById('promiseAmount').value;
     r.memo = document.getElementById('memo').value;
+    r.signsOther = r.signs.includes('その他') ? TV.norm(document.getElementById('signsOther').value) : '';
+    for (const m of TV.METERS) {
+      const raw = document.getElementById('m_' + m.key).value;
+      if (TV.norm(raw) !== '' && TV.meterValue(raw) === '') return toast(m.label + 'メーターは数字で入れてください');
+      r.meters[m.key] = TV.meterValue(raw);
+    }
     r.staff = S.staff;
     r.savedAt = new Date().toISOString();
     const i = S.current.reports.findIndex((x) => x.reportId === r.reportId);
@@ -379,7 +442,7 @@ function buildPayload() {
   const c = S.current;
   const stops = allStops();
   const byId = Object.fromEntries(stops.map((s) => [s.targetId, s]));
-  const strip = (s) => { const o = Object.assign({}, s); delete o.order; return o; };
+  const strip = (s) => { const o = Object.assign({}, s); delete o.order; delete o.prev; delete o.visitCount; return o; };
   return {
     type: TV.REPORT_TYPE, version: 1, appVersion: TV.APP_VERSION,
     exportedAt: new Date().toISOString(), staff: S.staff,
