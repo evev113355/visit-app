@@ -162,6 +162,68 @@ TV.googleRouteLinks = function (start, stops, mode) {
   return out;
 };
 
+// 日報一覧のPDF（A4横）。行がページをまたがないように1ページずつ詰めて、見出しを毎ページに付ける。
+// reps：日報の配列（visitedAt, staff, result, contact, signs, promiseDate, promiseAmount, nextAction, memo, added, target）
+// stage：画面外に置いた作業用の要素。html2canvas と jsPDF が必要。
+TV.listPdf = async function (reps, cond, stage) {
+  const e = TV.esc;
+  reps = reps.slice().sort((a, b) => String(a.visitedAt).localeCompare(String(b.visitedAt)));
+  const cnt = {}; reps.forEach((r) => cnt[r.result] = (cnt[r.result] || 0) + 1);
+  const summary = reps.length + '件（' + (Object.entries(cnt).map(([k, n]) => k + ' ' + n).join('／') || 'なし') + '）';
+  const W = 1123, H = 794; // A4横（96dpi）
+  const COLS = [['No', 3], ['訪問日時', 7.5], ['担当', 7], ['依頼元', 6.5], ['対象者', 8], ['物件・号室', 11.5], ['結果', 7], ['面談相手', 5.5], ['現地の様子', 10.5], ['支払約束', 7.5], ['次回', 8.5], ['メモ', 17.5]];
+  const css = '<style>' +
+    '.lp{width:' + W + 'px;height:' + H + 'px;padding:30px 34px 22px;background:#fff;color:#111;font-family:"Yu Gothic","Meiryo",sans-serif;box-sizing:border-box;display:flex;flex-direction:column}' +
+    '.lp .hd{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2px solid #1f4e79;padding-bottom:6px;margin-bottom:10px}' +
+    '.lp h1{font-size:19px;margin:0;letter-spacing:3px;color:#1f4e79}' +
+    '.lp .cond{font-size:11px;color:#333;margin-top:3px}.lp .sum{font-size:11.5px;text-align:right}' +
+    '.lp .bd{flex:1;overflow:hidden}' +
+    '.lp table{border-collapse:collapse;width:100%;table-layout:fixed}' +
+    '.lp th,.lp td{border:1px solid #9aa6b2;padding:4px 5px;font-size:10.5px;line-height:1.45;vertical-align:top;text-align:left;word-break:break-all;overflow-wrap:anywhere;position:static}' +
+    '.lp th{background:#1f4e79;color:#fff;font-weight:bold;text-align:center;font-size:10.5px}' +
+    '.lp tbody tr:nth-child(even) td{background:#f2f5f9}' +
+    '.lp td.c{text-align:center}.lp td.memo{white-space:pre-wrap}.lp b{font-weight:bold}' +
+    '.lp .ft{display:flex;justify-content:space-between;font-size:9.5px;color:#555;margin-top:6px}' +
+    '</style>';
+  const head = '<colgroup>' + COLS.map((c) => '<col style="width:' + c[1] + '%">').join('') + '</colgroup><thead><tr>' + COLS.map((c) => '<th>' + c[0] + '</th>').join('') + '</tr></thead>';
+  const row = (r, i) => {
+    const t = r.target || {};
+    const d = r.visitedAt ? TV.ymd(r.visitedAt, '/') + '<br>' + TV.hm(r.visitedAt) : '';
+    const promise = [r.promiseDate ? String(r.promiseDate).replace(/-/g, '/') : '', r.promiseAmount ? TV.yen(r.promiseAmount) : ''].filter(Boolean).map(e).join('<br>');
+    return '<tr><td class="c">' + (i + 1) + '</td><td>' + d + '</td><td>' + e(r.staff) + '</td><td>' + e(t.client) + '</td><td>' + e(t.name) + (r.added || t.added ? '<br><span style="color:#8e6c00">（追加訪問）</span>' : '') + '</td>' +
+      '<td>' + e(t.building) + ' ' + e(t.room) + '</td><td><b>' + e(r.result) + '</b></td><td>' + e(r.contact) + '</td><td>' + e((r.signs || []).join('、')) + '</td>' +
+      '<td>' + promise + '</td><td>' + e(r.nextAction) + '</td><td class="memo">' + e(r.memo) + '</td></tr>';
+  };
+  const now = TV.dateTimeText(new Date());
+  const newPage = (first) => {
+    const p = document.createElement('div'); p.className = 'lp';
+    p.innerHTML = '<div class="hd"><div><h1>訪問日報 一覧</h1><div class="cond">' + e(cond) + '</div></div><div class="sum">' + (first ? e(summary) : '（続き）') + '</div></div>' +
+      '<div class="bd"><table>' + head + '<tbody></tbody></table></div><div class="ft"><span>出力 ' + now + '</span><span class="pg"></span></div>';
+    stage.appendChild(p); return p;
+  };
+  stage.innerHTML = css;
+  const pages = [];
+  let page = newPage(true); pages.push(page);
+  reps.forEach((r, i) => {
+    let tb = page.querySelector('tbody'), bd = page.querySelector('.bd');
+    tb.insertAdjacentHTML('beforeend', row(r, i));
+    if (bd.scrollHeight > bd.clientHeight + 1 && tb.rows.length > 1) {
+      tb.lastElementChild.remove();
+      page = newPage(false); pages.push(page);
+      page.querySelector('tbody').insertAdjacentHTML('beforeend', row(r, i));
+    }
+  });
+  pages.forEach((p, i) => p.querySelector('.pg').textContent = (i + 1) + ' / ' + pages.length + ' ページ');
+  const pdf = new window.jspdf.jsPDF({ orientation: 'l', unit: 'mm', format: 'a4', compress: true });
+  for (let i = 0; i < pages.length; i++) {
+    const canvas = await html2canvas(pages[i], { scale: 2, backgroundColor: '#ffffff', width: W, height: H });
+    if (i) pdf.addPage('a4', 'l');
+    pdf.addImage(canvas.toDataURL('image/jpeg', 0.8), 'JPEG', 0, 0, 297, 210);
+  }
+  stage.innerHTML = '';
+  return pdf.output('blob');
+};
+
 TV.routeLengthKm = function (start, stops) {
   let s = 0, cur = start;
   stops.forEach((p) => { if (p.lat != null && cur.lat != null) { s += TV.dist(cur, p); cur = p; } });

@@ -727,21 +727,6 @@ function visitHtml(r, t, p) {
     <div class="foot">${r.pcEdited ? '最終修正 ' + e(TV.dateTimeText(r.editedAt)) + '（' + e(r.editedBy) + '）　' : ''}出力 ${TV.dateTimeText(new Date())}　日報ID ${e(r.reportId)}</div>
   </div>`;
 }
-// 検索結果の一覧PDF（1日のまとめにも使う：期間と担当者で絞ってから出力）
-function listHtml(reps, cond) {
-  const e = TV.esc;
-  reps = reps.slice().sort((a, b) => a.visitedAt.localeCompare(b.visitedAt));
-  const cnt = {}; reps.forEach((r) => cnt[r.result] = (cnt[r.result] || 0) + 1);
-  return `<div class="pdfPage sum">
-    <h1>訪問日報 一覧</h1>
-    <div class="sub">${e(cond)}</div>
-    <div style="margin-bottom:8px">${reps.length}件（${Object.entries(cnt).map(([k, v]) => e(k) + ' ' + v).join('／') || 'なし'}）</div>
-    <table><thead><tr><th>No</th><th>日時</th><th>担当</th><th>依頼元</th><th>対象者</th><th>物件・号室</th><th>結果</th><th>面談相手</th><th>現地の様子</th><th>支払約束</th><th>次回</th><th>メモ</th></tr></thead><tbody>
-    ${reps.map((r, i) => { const t = r.target || {}; return `<tr><td>${i + 1}</td><td>${TV.dateTimeText(r.visitedAt)}</td><td>${e(r.staff)}</td><td>${e(t.client)}</td><td>${e(t.name)}${t.added ? '<br>(追加)' : ''}</td><td>${e(t.building)} ${e(t.room)}</td><td>${e(r.result)}</td><td>${e(r.contact)}</td><td>${e((r.signs || []).join('、'))}</td><td>${e([r.promiseDate ? r.promiseDate.replace(/-/g, '/') : '', r.promiseAmount ? TV.yen(r.promiseAmount) : ''].filter(Boolean).join(' '))}</td><td>${e(r.nextAction)}</td><td style="white-space:pre-wrap">${e(r.memo)}</td></tr>`; }).join('')}
-    </tbody></table>
-    <div class="foot">出力 ${TV.dateTimeText(new Date())}</div>
-  </div>`;
-}
 // HTML を画像にして A4 PDF にする（長いときはページを分ける）
 async function renderPdf(html) {
   const stage = document.getElementById('pdfStage');
@@ -830,7 +815,7 @@ document.getElementById('listPdfBtn').onclick = async () => {
     const now = new Date();
     const dir = await dirPath(['まとめPDF', TV.ymd(now, '-').slice(0, 7)], true);
     const name = await uniqueName(dir, '一覧_' + TV.ymd(now) + '_' + TV.hm(now).replace(':', ''), '.pdf');
-    const blob = await renderPdf(listHtml(LAST_RES, cond));
+    const blob = await TV.listPdf(LAST_RES, cond, document.getElementById('pdfStage'));
     await writeFile(dir, name, blob);
     window.open(URL.createObjectURL(blob), '_blank');
   } catch (e) { alert('PDFを作れませんでした：' + e.message); }
