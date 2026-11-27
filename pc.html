@@ -363,7 +363,9 @@ function drawMap() {
     line.push([r.lat, r.lng]); pts.push([r.lat, r.lng]);
   });
   if (line.length > 1) L.polyline(line, { color: '#1f4e79', weight: 4, opacity: .85, dashArray: '10 7' }).addTo(layer);
-  if (pts.length) map.fitBounds(pts, { padding: [30, 30], maxZoom: 16 });
+  const routePts = line.length > 1 ? line : CANDS.filter((c) => c.checked && c.lat != null).map((c) => [c.lat, c.lng]);
+  const fit = routePts.length ? routePts : pts;
+  if (fit.length) map.fitBounds(fit, { padding: [50, 50], maxZoom: 16 });
 }
 
 function drawCands() {
