@@ -51,9 +51,10 @@
   #routeList li.dragging { opacity:.4; }
   #routeList .n { flex:0 0 26px; height:26px; border-radius:13px; background:var(--accent); color:#fff; display:flex; align-items:center; justify-content:center; font-weight:bold; font-size:12px; }
   #routeList .b { flex:1; min-width:0; }
-  .numIcon div { width:26px; height:26px; border-radius:13px; background:var(--accent); color:#fff; border:2px solid #fff; box-shadow:0 0 3px rgba(0,0,0,.5); display:flex; align-items:center; justify-content:center; font-weight:bold; font-size:12px; }
-  .numIcon.start div { background:#333; }
-  .numIcon.cand div { background:#9aa7b4; width:16px; height:16px; }
+  .numIcon .pin { width:34px; height:34px; border-radius:50% 50% 50% 0; background:#e8590c; transform:rotate(-45deg); border:3px solid #fff; box-shadow:0 0 0 1.5px #7a2e00, 0 3px 6px rgba(0,0,0,.45); display:flex; align-items:center; justify-content:center; }
+  .numIcon .pin span { transform:rotate(45deg); color:#fff; font-weight:bold; font-size:14px; }
+  .numIcon.start .pin { background:#1f4e79; box-shadow:0 0 0 1.5px #0b2440, 0 3px 6px rgba(0,0,0,.45); }
+  .numIcon.cand .dot { width:14px; height:14px; border-radius:50%; background:#6b7785; border:2px solid #fff; box-shadow:0 0 0 1px #333; }
   .log { background:#111; color:#dfe; font-family:Consolas,monospace; font-size:12px; padding:10px; border-radius:6px; max-height:300px; overflow:auto; white-space:pre-wrap; }
   .detail { white-space:pre-wrap; }
   .tagr { display:inline-block; padding:1px 6px; border-radius:4px; background:#e8eef6; color:var(--main); font-size:12px; margin-right:3px; }
@@ -327,9 +328,14 @@ let START = null; // 出発地点 {label,address,lat,lng}
 let pickTarget = null;
 
 const map = L.map('map').setView([34.69, 135.5], 11);
-L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png', { maxZoom: 18, attribution: '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank">国土地理院</a>' }).addTo(map);
+const gsiAttr = '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank">国土地理院</a>';
+const paleTiles = L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png', { maxZoom: 18, attribution: gsiAttr }).addTo(map);
+const stdTiles = L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png', { maxZoom: 18, attribution: gsiAttr });
+L.control.layers({ '淡色地図（目印が見やすい）': paleTiles, '標準地図': stdTiles }, null, { position: 'topright' }).addTo(map);
 const layer = L.layerGroup().addTo(map);
-const icon = (cls, txt) => L.divIcon({ className: 'numIcon ' + cls, html: '<div>' + txt + '</div>', iconSize: [26, 26], iconAnchor: [13, 13] });
+const icon = (cls, txt) => cls === 'cand'
+  ? L.divIcon({ className: 'numIcon cand', html: '<div class="dot"></div>', iconSize: [14, 14], iconAnchor: [7, 7], tooltipAnchor: [8, 0] })
+  : L.divIcon({ className: 'numIcon ' + cls, html: '<div class="pin"><span>' + txt + '</span></div>', iconSize: [34, 34], iconAnchor: [17, 41], tooltipAnchor: [16, -24] });
 
 map.on('click', (e) => {
   if (!pickTarget) return;
@@ -356,7 +362,7 @@ function drawMap() {
     L.marker([r.lat, r.lng], { icon: icon('', i + 1) }).bindTooltip((i + 1) + '. ' + r.name + '（' + r.building + ' ' + r.room + '）').addTo(layer);
     line.push([r.lat, r.lng]); pts.push([r.lat, r.lng]);
   });
-  if (line.length > 1) L.polyline(line, { color: '#2e75b6', weight: 3, opacity: .7, dashArray: '6 6' }).addTo(layer);
+  if (line.length > 1) L.polyline(line, { color: '#1f4e79', weight: 4, opacity: .85, dashArray: '10 7' }).addTo(layer);
   if (pts.length) map.fitBounds(pts, { padding: [30, 30], maxZoom: 16 });
 }
 
